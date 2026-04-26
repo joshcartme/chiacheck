@@ -41,7 +41,7 @@ fn print_score(score: &HealthScore) {
 /// Check out each commit in `commits`, run metrics from `config_path`, then
 /// restore HEAD.  Returns the collected scores in chronological order.
 fn score_commits(commits: &[String], config_path: &str) -> Result<Vec<HealthScore>> {
-    let original = git::get_current_commit()?;
+    let head_ref = git::get_head_ref()?;
     let mut scores: Vec<HealthScore> = Vec::new();
     let mut error_occurred = false;
 
@@ -52,7 +52,15 @@ fn score_commits(commits: &[String], config_path: &str) -> Result<Vec<HealthScor
             error_occurred = true;
             continue;
         }
-        let config = load_config(config_path)?;
+        // Do NOT use `?` here – an error must not skip the restore block below.
+        let config = match load_config(config_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Warning: could not load config at {}: {}", config_path, e);
+                error_occurred = true;
+                continue;
+            }
+        };
         let results: Vec<_> = config.metrics.iter().map(run_metric).collect();
         let overall = calculate_score(&results);
         let date = git::get_commit_date(sha).unwrap_or_default();
@@ -66,13 +74,9 @@ fn score_commits(commits: &[String], config_path: &str) -> Result<Vec<HealthScor
         });
     }
 
-    // Always restore original commit
-    if let Err(e) = git::checkout_commit(&original) {
-        eprintln!(
-            "Warning: could not restore to {}: {}",
-            &original[..original.len().min(8)],
-            e
-        );
+    // Always restore original HEAD, whether on a branch or detached.
+    if let Err(e) = git::restore_head(&head_ref) {
+        eprintln!("Warning: could not restore HEAD to {}: {}", head_ref, e);
     }
 
     if error_occurred {

@@ -9,14 +9,12 @@ fn run_command(command: &str) -> Result<String, String> {
         .output()
         .map_err(|e| format!("Failed to execute command: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() && stdout.trim().is_empty() {
-        return Err(format!("Command failed: {}", stderr.trim()));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Command failed ({}): {}", output.status, stderr.trim()));
     }
 
-    Ok(stdout)
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn clamp(val: f64) -> f64 {
@@ -119,12 +117,11 @@ fn run_coverage(config: &MetricConfig) -> Result<(f64, String), String> {
 }
 
 fn coverage_score(pct: f64, min_threshold: f64) -> f64 {
-    if pct >= min_threshold {
+    if min_threshold <= 0.0 || pct >= min_threshold {
         pct
-    } else if min_threshold > 0.0 {
-        pct / min_threshold * pct
     } else {
-        pct
+        // Proportional: coverage at min_threshold earns 100, linearly down to 0.
+        pct / min_threshold * 100.0
     }
 }
 

@@ -29,9 +29,8 @@ fn parse_commit_lines(output: &str) -> Vec<String> {
 pub fn get_commits_in_range(from: &str, to: &str) -> Result<Vec<String>> {
     let range = format!("{}..{}", from, to);
     let output = run_git(&["log", "--pretty=format:%H", &range])?;
+    // git log returns newest-first; `from..to` already includes `to` itself
     let mut commits = parse_commit_lines(&output);
-    // Include `to` commit itself (git log `from..to` excludes `from`, includes `to`)
-    commits.insert(0, to.to_string());
     commits.reverse();
     Ok(commits)
 }
@@ -53,6 +52,30 @@ pub fn checkout_commit(sha: &str) -> Result<()> {
 
 pub fn get_current_commit() -> Result<String> {
     run_git(&["rev-parse", "HEAD"])
+}
+
+/// Returns the current branch name if HEAD is on a branch, or the commit SHA
+/// if HEAD is detached.  Always use this (not `get_current_commit`) before a
+/// traversal so that `restore_head` can return to the branch afterwards.
+pub fn get_head_ref() -> Result<String> {
+    match run_git(&["symbolic-ref", "--short", "HEAD"]) {
+        Ok(branch) if !branch.is_empty() => Ok(branch),
+        _ => run_git(&["rev-parse", "HEAD"]),
+    }
+}
+
+/// Restore HEAD to a ref returned by `get_head_ref`.  If the ref looks like a
+/// branch name, a normal `git checkout` is used so the branch tracking is
+/// preserved; otherwise a detached checkout is used.
+pub fn restore_head(head_ref: &str) -> Result<()> {
+    // A SHA is 40 hex chars; anything shorter/different is treated as a branch.
+    let is_sha = head_ref.len() == 40 && head_ref.chars().all(|c| c.is_ascii_hexdigit());
+    if is_sha {
+        run_git(&["checkout", "--detach", head_ref])?;
+    } else {
+        run_git(&["checkout", head_ref])?;
+    }
+    Ok(())
 }
 
 pub fn get_commit_date(sha: &str) -> Result<String> {
