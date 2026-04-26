@@ -16,15 +16,21 @@ fn run_git(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn get_commits_in_range(from: &str, to: &str) -> Result<Vec<String>> {
-    let range = format!("{}..{}", from, to);
-    let output = run_git(&["log", "--pretty=format:%H", &range])?;
-    let mut commits: Vec<String> = output
+/// Parse `git log --pretty=format:%H` output into a list of commit SHAs,
+/// trimming whitespace and removing empty lines.
+fn parse_commit_lines(output: &str) -> Vec<String> {
+    output
         .lines()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
-        .collect();
-    // Include `to` commit itself
+        .collect()
+}
+
+pub fn get_commits_in_range(from: &str, to: &str) -> Result<Vec<String>> {
+    let range = format!("{}..{}", from, to);
+    let output = run_git(&["log", "--pretty=format:%H", &range])?;
+    let mut commits = parse_commit_lines(&output);
+    // Include `to` commit itself (git log `from..to` excludes `from`, includes `to`)
     commits.insert(0, to.to_string());
     commits.reverse();
     Ok(commits)
@@ -34,14 +40,10 @@ pub fn get_commits_in_date_range(from: &str, to: &str) -> Result<Vec<String>> {
     let after = format!("--after={}", from);
     let before = format!("--before={}", to);
     let output = run_git(&["log", "--pretty=format:%H", &after, &before])?;
-    let commits: Vec<String> = output
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-    let mut commits_rev: Vec<String> = commits.into_iter().rev().collect();
-    commits_rev.dedup();
-    Ok(commits_rev)
+    let mut commits = parse_commit_lines(&output);
+    commits.reverse();
+    commits.dedup();
+    Ok(commits)
 }
 
 pub fn checkout_commit(sha: &str) -> Result<()> {

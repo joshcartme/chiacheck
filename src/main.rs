@@ -38,38 +38,21 @@ fn print_score(score: &HealthScore) {
     println!();
 }
 
-fn run_score_command() -> Result<HealthScore> {
-    let config = load_config("fiber.toml")?;
-    let results: Vec<_> = config.metrics.iter().map(run_metric).collect();
-    let overall = calculate_score(&results);
-    Ok(HealthScore {
-        overall,
-        metrics: results,
-        commit: git::get_current_commit().ok(),
-        timestamp: Utc::now(),
-    })
-}
-
-fn run_range_command(from: &str, to: &str, output: Option<&str>) -> Result<()> {
+/// Check out each commit in `commits`, run metrics from `config_path`, then
+/// restore HEAD.  Returns the collected scores in chronological order.
+fn score_commits(commits: &[String], config_path: &str) -> Result<Vec<HealthScore>> {
     let original = git::get_current_commit()?;
-    let commits = git::get_commits_in_range(from, to)?;
-
-    if commits.is_empty() {
-        println!("No commits found in range {}..{}", from, to);
-        return Ok(());
-    }
-
     let mut scores: Vec<HealthScore> = Vec::new();
     let mut error_occurred = false;
 
-    for sha in &commits {
+    for sha in commits {
         println!("Checking out {}...", &sha[..sha.len().min(8)]);
         if let Err(e) = git::checkout_commit(sha) {
             eprintln!("Warning: could not checkout {}: {}", sha, e);
             error_occurred = true;
             continue;
         }
-        let config = load_config("fiber.toml")?;
+        let config = load_config(config_path)?;
         let results: Vec<_> = config.metrics.iter().map(run_metric).collect();
         let overall = calculate_score(&results);
         let date = git::get_commit_date(sha).unwrap_or_default();
@@ -83,7 +66,7 @@ fn run_range_command(from: &str, to: &str, output: Option<&str>) -> Result<()> {
         });
     }
 
-    // Restore original commit
+    // Always restore original commit
     if let Err(e) = git::checkout_commit(&original) {
         eprintln!(
             "Warning: could not restore to {}: {}",
@@ -96,16 +79,41 @@ fn run_range_command(from: &str, to: &str, output: Option<&str>) -> Result<()> {
         eprintln!("Some commits had errors.");
     }
 
-    for s in &scores {
+    Ok(scores)
+}
+
+/// Print all scores and optionally write an HTML report.
+fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> {
+    for s in scores {
         print_score(s);
     }
-
     if let Some(path) = output {
-        report::generate_html_report(&scores, path)?;
+        report::generate_html_report(scores, path)?;
         println!("Report written to {}", path);
     }
-
     Ok(())
+}
+
+fn run_score_command(config_path: &str) -> Result<HealthScore> {
+    let config = load_config(config_path)?;
+    let results: Vec<_> = config.metrics.iter().map(run_metric).collect();
+    let overall = calculate_score(&results);
+    Ok(HealthScore {
+        overall,
+        metrics: results,
+        commit: git::get_current_commit().ok(),
+        timestamp: Utc::now(),
+    })
+}
+
+fn run_range_command(from: &str, to: &str, output: Option<&str>, config_path: &str) -> Result<()> {
+    let commits = git::get_commits_in_range(from, to)?;
+    if commits.is_empty() {
+        println!("No commits found in range {}..{}", from, to);
+        return Ok(());
+    }
+    let scores = score_commits(&commits, config_path)?;
+    print_and_report(&scores, output)
 }
 
 fn run_history_command(
@@ -113,6 +121,7 @@ fn run_history_command(
     to: Option<&str>,
     days: Option<u32>,
     output: Option<&str>,
+    config_path: &str,
 ) -> Result<()> {
     let (from_str, to_str) = if let Some(d) = days {
         let to_date = Utc::now().format("%Y-%m-%d").to_string();
@@ -126,72 +135,25 @@ fn run_history_command(
         (f.to_string(), t.to_string())
     };
 
-    let original = git::get_current_commit()?;
     let commits = git::get_commits_in_date_range(&from_str, &to_str)?;
-
     if commits.is_empty() {
         println!("No commits found between {} and {}", from_str, to_str);
         return Ok(());
     }
-
-    let mut scores: Vec<HealthScore> = Vec::new();
-    let mut error_occurred = false;
-
-    for sha in &commits {
-        println!("Checking out {}...", &sha[..sha.len().min(8)]);
-        if let Err(e) = git::checkout_commit(sha) {
-            eprintln!("Warning: could not checkout {}: {}", sha, e);
-            error_occurred = true;
-            continue;
-        }
-        let config = load_config("fiber.toml")?;
-        let results: Vec<_> = config.metrics.iter().map(run_metric).collect();
-        let overall = calculate_score(&results);
-        let date = git::get_commit_date(sha).unwrap_or_default();
-        scores.push(HealthScore {
-            overall,
-            metrics: results,
-            commit: Some(sha.clone()),
-            timestamp: chrono::DateTime::parse_from_str(&date, "%Y-%m-%d %H:%M:%S %z")
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-        });
-    }
-
-    // Restore original commit
-    if let Err(e) = git::checkout_commit(&original) {
-        eprintln!(
-            "Warning: could not restore to {}: {}",
-            &original[..original.len().min(8)],
-            e
-        );
-    }
-
-    if error_occurred {
-        eprintln!("Some commits had errors.");
-    }
-
-    for s in &scores {
-        print_score(s);
-    }
-
-    if let Some(path) = output {
-        report::generate_html_report(&scores, path)?;
-        println!("Report written to {}", path);
-    }
-
-    Ok(())
+    let scores = score_commits(&commits, config_path)?;
+    print_and_report(&scores, output)
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config_path = cli.config.as_str();
     match cli.command {
         Commands::Score => {
-            let score = run_score_command()?;
+            let score = run_score_command(config_path)?;
             print_score(&score);
         }
         Commands::Range { from, to, output } => {
-            run_range_command(&from, &to, output.as_deref())?;
+            run_range_command(&from, &to, output.as_deref(), config_path)?;
         }
         Commands::History {
             from,
@@ -199,7 +161,7 @@ fn main() -> Result<()> {
             days,
             output,
         } => {
-            run_history_command(from.as_deref(), to.as_deref(), days, output.as_deref())?;
+            run_history_command(from.as_deref(), to.as_deref(), days, output.as_deref(), config_path)?;
         }
     }
     Ok(())

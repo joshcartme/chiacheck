@@ -3,6 +3,8 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::fs;
 
+pub const DEFAULT_CONFIG: &str = "fiber.toml";
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct MetricConfig {
     pub name: String,

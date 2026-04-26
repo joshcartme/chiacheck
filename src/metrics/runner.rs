@@ -25,8 +25,7 @@ fn clamp(val: f64) -> f64 {
 
 pub fn run_metric(config: &MetricConfig) -> MetricResult {
     let result = match config.metric_type.as_str() {
-        "eslint" => run_eslint(config),
-        "oxlint" => run_oxlint(config),
+        "eslint" | "oxlint" => run_lint_tool(config),
         "coverage" => run_coverage(config),
         "count" => run_count(config),
         "percentage" => run_percentage(config),
@@ -50,51 +49,15 @@ pub fn run_metric(config: &MetricConfig) -> MetricResult {
     }
 }
 
-fn run_eslint(config: &MetricConfig) -> Result<(f64, String), String> {
+/// Shared implementation for lint-style tools (eslint, oxlint).
+/// Parses JSON array output with `errorCount`/`warningCount` per file,
+/// falling back to counting lines containing "error"/"warning".
+fn run_lint_tool(config: &MetricConfig) -> Result<(f64, String), String> {
     let output = run_command(&config.command)?;
 
     let error_penalty = config.error_penalty.unwrap_or(1.0);
     let warning_penalty = config.warning_penalty.unwrap_or(0.5);
 
-    // ESLint JSON output is an array of file results
-    match serde_json::from_str::<serde_json::Value>(&output) {
-        Ok(json) => {
-            let mut total_errors = 0u64;
-            let mut total_warnings = 0u64;
-
-            if let Some(files) = json.as_array() {
-                for file in files {
-                    total_errors += file["errorCount"].as_u64().unwrap_or(0);
-                    total_warnings += file["warningCount"].as_u64().unwrap_or(0);
-                }
-            }
-
-            let score = 100.0
-                - total_errors as f64 * error_penalty
-                - total_warnings as f64 * warning_penalty;
-            let details = format!("{} errors, {} warnings", total_errors, total_warnings);
-            Ok((score, details))
-        }
-        Err(_) => {
-            // Fall back to counting error/warning lines
-            let errors = output.lines().filter(|l| l.contains("error")).count();
-            let warnings = output.lines().filter(|l| l.contains("warning")).count();
-            let score = 100.0 - errors as f64 * error_penalty - warnings as f64 * warning_penalty;
-            Ok((
-                score,
-                format!("{} errors, {} warnings (text parse)", errors, warnings),
-            ))
-        }
-    }
-}
-
-fn run_oxlint(config: &MetricConfig) -> Result<(f64, String), String> {
-    let output = run_command(&config.command)?;
-
-    let error_penalty = config.error_penalty.unwrap_or(1.0);
-    let warning_penalty = config.warning_penalty.unwrap_or(0.5);
-
-    // Try JSON first
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&output) {
         let mut total_errors = 0u64;
         let mut total_warnings = 0u64;
@@ -112,7 +75,7 @@ fn run_oxlint(config: &MetricConfig) -> Result<(f64, String), String> {
         ));
     }
 
-    // Fall back to counting "error" lines
+    // Fall back to counting error/warning lines
     let errors = output
         .lines()
         .filter(|l| l.to_lowercase().contains("error"))
