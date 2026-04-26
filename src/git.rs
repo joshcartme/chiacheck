@@ -64,17 +64,11 @@ pub fn get_head_ref() -> Result<String> {
     }
 }
 
-/// Restore HEAD to a ref returned by `get_head_ref`.  If the ref looks like a
-/// branch name, a normal `git checkout` is used so the branch tracking is
-/// preserved; otherwise a detached checkout is used.
+/// Restore HEAD to a ref returned by `get_head_ref`.
+/// Works for both branch names and commit SHAs — git will put HEAD on the
+/// branch if the ref is a branch name, or enter detached HEAD for a SHA.
 pub fn restore_head(head_ref: &str) -> Result<()> {
-    // A SHA is 40 hex chars; anything shorter/different is treated as a branch.
-    let is_sha = head_ref.len() == 40 && head_ref.chars().all(|c| c.is_ascii_hexdigit());
-    if is_sha {
-        run_git(&["checkout", "--detach", head_ref])?;
-    } else {
-        run_git(&["checkout", head_ref])?;
-    }
+    run_git(&["checkout", head_ref])?;
     Ok(())
 }
 

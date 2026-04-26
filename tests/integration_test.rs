@@ -192,11 +192,8 @@ fn test_failing_command_surfaces_error() {
 
 #[test]
 fn test_get_commits_in_range_no_duplicate() {
-    // This test verifies the function does not panic on an empty range;
-    // actual git traversal is tested in CI.  We simply confirm the return type.
-    // (Running against this repo's own history would be fragile in CI.)
+    // An empty range (A..A) should return no commits.
     let result = fiber::git::get_commits_in_range("HEAD", "HEAD");
-    // An empty range (A..A) should succeed and return 0 commits.
     match result {
         Ok(commits) => assert!(
             commits.is_empty(),
@@ -204,5 +201,21 @@ fn test_get_commits_in_range_no_duplicate() {
             commits
         ),
         Err(_) => {} // acceptable if git is unavailable in test env
+    }
+}
+
+#[test]
+fn test_get_commits_in_range_no_duplicate_nonempty() {
+    // For a non-empty range (HEAD~1..HEAD) the returned list should contain
+    // exactly the commits between those two points with no duplicates.
+    // We skip gracefully when the repo has fewer than 2 commits or git is absent.
+    let commits = match fiber::git::get_commits_in_range("HEAD~1", "HEAD") {
+        Ok(c) if !c.is_empty() => c,
+        _ => return, // skip
+    };
+    // No SHA should appear more than once.
+    let mut seen = std::collections::HashSet::new();
+    for sha in &commits {
+        assert!(seen.insert(sha), "Duplicate commit SHA in range result: {}", sha);
     }
 }
