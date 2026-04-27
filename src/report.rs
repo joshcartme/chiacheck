@@ -53,15 +53,13 @@ fn build_html(scores: &[HealthScore]) -> String {
         .iter()
         .map(|hs| (hs.overall * 10.0).round() / 10.0)
         .collect();
-    let overall_json = serde_json::to_string(&overall_data).unwrap_or_default();
-
     // Metric colors
     let colors = [
         "#3b82f6", "#f97316", "#a855f7", "#14b8a6", "#f43f5e", "#84cc16", "#06b6d4", "#8b5cf6",
     ];
 
-    // Build metric datasets
-    let mut metric_datasets = String::new();
+    // Build metric datasets safely via JSON serialization
+    let mut metric_datasets = Vec::new();
     for (i, name) in metric_names.iter().enumerate() {
         let color = colors[i % colors.len()];
         let data: Vec<f64> = scores
@@ -74,20 +72,30 @@ fn build_html(scores: &[HealthScore]) -> String {
                     .unwrap_or(0.0)
             })
             .collect();
-        let data_json = serde_json::to_string(&data).unwrap_or_default();
-        metric_datasets.push_str(&format!(
-            r#"{{
-                label: '{}',
-                data: {},
-                borderColor: '{}',
-                backgroundColor: '{}22',
-                borderWidth: 2,
-                tension: 0.3,
-                pointRadius: 4,
-            }},"#,
-            name, data_json, color, color
-        ));
+        metric_datasets.push(serde_json::json!({
+            "label": name,
+            "data": data,
+            "borderColor": color,
+            "backgroundColor": format!("{color}22"),
+            "borderWidth": 2,
+            "tension": 0.3,
+            "pointRadius": 4
+        }));
     }
+    let datasets_json = serde_json::to_string(&{
+        let mut datasets = vec![serde_json::json!({
+            "label": "Overall",
+            "data": overall_data,
+            "borderColor": "#38bdf8",
+            "backgroundColor": "#38bdf822",
+            "borderWidth": 3,
+            "tension": 0.3,
+            "pointRadius": 5
+        })];
+        datasets.extend(metric_datasets);
+        datasets
+    })
+    .unwrap_or_default();
 
     // Build table rows
     let mut table_rows = String::new();
@@ -108,7 +116,9 @@ fn build_html(scores: &[HealthScore]) -> String {
                         let c = score_color(m.score);
                         format!(
                             r#"<td style="color:{}">{:.1}<br><small style="color:#888">{}</small></td>"#,
-                            c, m.score, m.details
+                            c,
+                            m.score,
+                            htmlize::escape_text(&m.details)
                         )
                     }
                     None => "<td>-</td>".to_string(),
@@ -122,13 +132,17 @@ fn build_html(scores: &[HealthScore]) -> String {
                 <td style="color:{};font-weight:bold">{:.1}</td>
                 {}
             </tr>"#,
-            commit_label, date_label, overall_color, hs.overall, metric_cells
+            htmlize::escape_text(commit_label),
+            htmlize::escape_text(&date_label),
+            overall_color,
+            hs.overall,
+            metric_cells
         ));
     }
 
     let metric_headers: String = metric_names
         .iter()
-        .map(|n| format!("<th>{}</th>", n))
+        .map(|n| format!("<th>{}</th>", htmlize::escape_text(n)))
         .collect();
 
     format!(
@@ -168,18 +182,7 @@ new Chart(ctx, {{
   type: 'line',
   data: {{
     labels: {},
-    datasets: [
-      {{
-        label: 'Overall',
-        data: {},
-        borderColor: '#38bdf8',
-        backgroundColor: '#38bdf822',
-        borderWidth: 3,
-        tension: 0.3,
-        pointRadius: 5,
-      }},
-      {}
-    ]
+    datasets: {}
   }},
   options: {{
     responsive: true,
@@ -204,7 +207,6 @@ new Chart(ctx, {{
         metric_headers,
         table_rows,
         labels_json,
-        overall_json,
-        metric_datasets,
+        datasets_json,
     )
 }
