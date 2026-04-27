@@ -1,5 +1,7 @@
+use crate::metrics::MetricResult;
 use crate::scorer::HealthScore;
 use anyhow::Result;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 
 pub fn generate_html_report(scores: &[HealthScore], output_path: &str) -> Result<()> {
@@ -26,15 +28,22 @@ fn json_for_html_script<T: serde::Serialize>(value: &T) -> String {
 }
 
 fn build_html(scores: &[HealthScore]) -> String {
-    // Collect all metric names
+    // Collect all metric names in insertion order, deduplicating with a HashSet.
     let mut metric_names: Vec<String> = Vec::new();
+    let mut seen_metric_names: HashSet<&str> = HashSet::new();
     for hs in scores {
         for m in &hs.metrics {
-            if !metric_names.contains(&m.name) {
+            if seen_metric_names.insert(m.name.as_str()) {
                 metric_names.push(m.name.clone());
             }
         }
     }
+
+    // Pre-build per-HealthScore lookup maps for O(1) metric access.
+    let score_maps: Vec<HashMap<&str, &MetricResult>> = scores
+        .iter()
+        .map(|hs| hs.metrics.iter().map(|m| (m.name.as_str(), m)).collect())
+        .collect();
 
     // Labels (commit SHAs or timestamps)
     let labels: Vec<String> = scores
@@ -69,12 +78,10 @@ fn build_html(scores: &[HealthScore]) -> String {
     let mut metric_datasets = Vec::new();
     for (i, name) in metric_names.iter().enumerate() {
         let color = colors[i % colors.len()];
-        let data: Vec<f64> = scores
+        let data: Vec<f64> = score_maps
             .iter()
-            .map(|hs| {
-                hs.metrics
-                    .iter()
-                    .find(|m| &m.name == name)
+            .map(|map| {
+                map.get(name.as_str())
                     .map(|m| (m.score * 10.0).round() / 10.0)
                     .unwrap_or(0.0)
             })
@@ -106,7 +113,7 @@ fn build_html(scores: &[HealthScore]) -> String {
 
     // Build table rows
     let mut table_rows = String::new();
-    for hs in scores {
+    for (hs, score_map) in scores.iter().zip(score_maps.iter()) {
         let commit_label = hs
             .commit
             .as_deref()
@@ -117,7 +124,7 @@ fn build_html(scores: &[HealthScore]) -> String {
         let metric_cells: String = metric_names
             .iter()
             .map(|name| {
-                let m = hs.metrics.iter().find(|m| &m.name == name);
+                let m = score_map.get(name.as_str()).copied();
                 match m {
                     Some(m) => {
                         let c = score_color(m.score);
