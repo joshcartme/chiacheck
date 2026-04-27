@@ -18,6 +18,13 @@ fn score_color(score: f64) -> &'static str {
     }
 }
 
+fn json_for_html_script<T: serde::Serialize>(value: &T) -> String {
+    // Prevent `</script>` from terminating script tags early in HTML.
+    serde_json::to_string(value)
+        .unwrap_or_default()
+        .replace("</", "<\\/")
+}
+
 fn build_html(scores: &[HealthScore]) -> String {
     // Collect all metric names
     let mut metric_names: Vec<String> = Vec::new();
@@ -46,7 +53,7 @@ fn build_html(scores: &[HealthScore]) -> String {
         })
         .collect();
 
-    let labels_json = serde_json::to_string(&labels).unwrap_or_default();
+    let labels_json = json_for_html_script(&labels);
 
     // Overall scores dataset
     let overall_data: Vec<f64> = scores
@@ -82,7 +89,7 @@ fn build_html(scores: &[HealthScore]) -> String {
             "pointRadius": 4
         }));
     }
-    let datasets_json = serde_json::to_string(&{
+    let datasets = {
         let mut datasets = vec![serde_json::json!({
             "label": "Overall",
             "data": overall_data,
@@ -94,8 +101,8 @@ fn build_html(scores: &[HealthScore]) -> String {
         })];
         datasets.extend(metric_datasets);
         datasets
-    })
-    .unwrap_or_default();
+    };
+    let datasets_json = json_for_html_script(&datasets);
 
     // Build table rows
     let mut table_rows = String::new();
@@ -176,13 +183,17 @@ fn build_html(scores: &[HealthScore]) -> String {
   <thead><tr><th>Commit</th><th>Date</th><th>Overall</th>{}</tr></thead>
   <tbody>{}</tbody>
 </table>
+<script id="chart-labels" type="application/json">{}</script>
+<script id="chart-datasets" type="application/json">{}</script>
 <script>
+const labels = JSON.parse(document.getElementById('chart-labels').textContent);
+const datasets = JSON.parse(document.getElementById('chart-datasets').textContent);
 const ctx = document.getElementById('chart').getContext('2d');
 new Chart(ctx, {{
   type: 'line',
   data: {{
-    labels: {},
-    datasets: {}
+    labels,
+    datasets
   }},
   options: {{
     responsive: true,
