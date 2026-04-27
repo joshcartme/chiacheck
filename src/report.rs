@@ -160,7 +160,7 @@ fn build_html(scores: &[HealthScore]) -> String {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fiber Health Score Report</title>
 <!-- Pin to a specific version; verify SRI hash before deploying to production -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.min.js" integrity="sha512-n/G+dROKbKL3GVngGWmWfwK0yPctjZQM752diVYnXZtD/48agpUKLIn0xDQL9ydZ91x6BiOmTIFwWjjFi2kEFg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   body {{ font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }}
   h1 {{ color: #38bdf8; margin-bottom: 0.5rem; }}
