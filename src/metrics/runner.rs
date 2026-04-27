@@ -130,11 +130,19 @@ fn run_count(config: &MetricConfig) -> Result<(f64, String), String> {
     let max_count = config.max_count.unwrap_or(100.0);
     let trimmed = output.trim();
 
+    if !max_count.is_finite() || max_count <= 0.0 {
+        return Err(format!(
+            "Invalid max_count {}: must be a finite value greater than 0",
+            max_count
+        ));
+    }
+
     match trimmed.parse::<f64>() {
-        Ok(count) => {
+        Ok(count) if count.is_finite() => {
             let score = 100.0 * (1.0 - count / max_count);
             Ok((score, format!("{} issues (max {})", count, max_count)))
         }
+        Ok(count) => Err(format!("Count output is not finite: {}", count)),
         Err(_) => Err(format!("Cannot parse count output: {}", trimmed)),
     }
 }
