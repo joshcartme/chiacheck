@@ -226,12 +226,13 @@ fiber history --from 2024-01-01 --to 2024-03-31 --output q1.html
 
 ## HTML Report
 
-When `--output` is provided to `range` or `history`, Fiber generates a self-contained HTML page with:
+When `--output` is provided to `range` or `history`, Fiber generates an HTML report with:
 
 - An interactive **Chart.js** line chart showing overall score and each metric over time
 - A **data table** with per-commit scores and metric details
 - Colour coding: 🟢 ≥80, 🟡 ≥60, 🔴 <60
 
+Note: if the generated report loads **Chart.js** from a CDN, viewing the chart requires network access unless Chart.js is bundled separately.
 ---
 
 ## Custom Metrics Guide
