@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 pub fn generate_html_report(scores: &[HealthScore], output_path: &str) -> Result<()> {
-    let html = build_html(scores);
+    let html = build_html(scores)?;
     fs::write(output_path, html)?;
     Ok(())
 }
@@ -20,14 +20,12 @@ fn score_color(score: f64) -> &'static str {
     }
 }
 
-fn json_for_html_script<T: serde::Serialize>(value: &T) -> String {
+fn json_for_html_script<T: serde::Serialize>(value: &T) -> Result<String> {
     // Prevent `</script>` from terminating script tags early in HTML.
-    serde_json::to_string(value)
-        .unwrap_or_default()
-        .replace("</", "<\\/")
+    Ok(serde_json::to_string(value)?.replace("</", "<\\/"))
 }
 
-fn build_html(scores: &[HealthScore]) -> String {
+fn build_html(scores: &[HealthScore]) -> Result<String> {
     // Collect all metric names in insertion order, deduplicating with a HashSet.
     let mut metric_names: Vec<String> = Vec::new();
     let mut seen_metric_names: HashSet<&str> = HashSet::new();
@@ -62,7 +60,7 @@ fn build_html(scores: &[HealthScore]) -> String {
         })
         .collect();
 
-    let labels_json = json_for_html_script(&labels);
+    let labels_json = json_for_html_script(&labels)?;
 
     // Overall scores dataset
     let overall_data: Vec<f64> = scores
@@ -109,7 +107,7 @@ fn build_html(scores: &[HealthScore]) -> String {
         datasets.extend(metric_datasets);
         datasets
     };
-    let datasets_json = json_for_html_script(&datasets);
+    let datasets_json = json_for_html_script(&datasets)?;
 
     // Build table rows
     let mut table_rows = String::new();
@@ -159,7 +157,7 @@ fn build_html(scores: &[HealthScore]) -> String {
         .map(|n| format!("<th>{}</th>", htmlize::escape_text(n)))
         .collect();
 
-    format!(
+    Ok(format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -226,5 +224,5 @@ new Chart(ctx, {{
         table_rows,
         labels_json,
         datasets_json,
-    )
+    ))
 }
