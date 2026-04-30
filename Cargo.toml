@@ -19,6 +19,7 @@ oxc_span = "0.127"
 oxc_ast = "0.127"
 oxc_ast_visit = "0.127"
 glob = "0.3"
+rayon = "1"
 
 [dev-dependencies]
 tempfile = "3"

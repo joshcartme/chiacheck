@@ -1,7 +1,8 @@
 use crate::metrics::MetricResult;
 use crate::scorer::HealthScore;
 use anyhow::Result;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::fmt::Write as FmtWrite;
 use std::fs;
 
 pub fn generate_html_report(scores: &[HealthScore], output_path: &str) -> Result<()> {
@@ -12,7 +13,13 @@ pub fn generate_html_report(scores: &[HealthScore], output_path: &str) -> Result
 
 fn json_for_html_script<T: serde::Serialize>(value: &T) -> Result<String> {
     // Prevent `</script>` from terminating script tags early in HTML.
-    Ok(serde_json::to_string(value)?.replace("</", "<\\/"))
+    // Only allocate a second string when the escape sequence is actually present (#19).
+    let json = serde_json::to_string(value)?;
+    if json.contains("</") {
+        Ok(json.replace("</", "<\\/"))
+    } else {
+        Ok(json)
+    }
 }
 
 fn build_html(scores: &[HealthScore]) -> Result<String> {
@@ -27,10 +34,24 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
         }
     }
 
-    // Pre-build per-HealthScore lookup maps for O(1) metric access.
-    let score_maps: Vec<HashMap<&str, &MetricResult>> = scores
+    // Build a metric_index for O(1) name→column lookup, and a dense matrix of
+    // Option<&MetricResult> per (commit, metric) pair so iteration never re-hashes (#21).
+    let metric_index: std::collections::HashMap<&str, usize> = metric_names
         .iter()
-        .map(|hs| hs.metrics.iter().map(|m| (m.name.as_str(), m)).collect())
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    let score_matrix: Vec<Vec<Option<&MetricResult>>> = scores
+        .iter()
+        .map(|hs| {
+            let mut row = vec![None; metric_names.len()];
+            for m in &hs.metrics {
+                if let Some(&idx) = metric_index.get(m.name.as_str()) {
+                    row[idx] = Some(m);
+                }
+            }
+            row
+        })
         .collect();
 
     // Labels (commit SHAs or timestamps)
@@ -53,66 +74,80 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
     let labels_json = json_for_html_script(&labels)?;
 
     // Stacked bar chart: one dataset per metric, value = total_penalty for that commit.
-    let colors = [
+    // Use a typed struct instead of serde_json::json! to avoid DOM allocation (#20).
+    #[derive(serde::Serialize)]
+    struct ChartDataset<'a> {
+        label: &'a str,
+        data: Vec<f64>,
+        #[serde(rename = "backgroundColor")]
+        background_color: &'static str,
+        #[serde(rename = "borderColor")]
+        border_color: &'static str,
+        #[serde(rename = "borderWidth")]
+        border_width: u32,
+    }
+
+    let colors: &[&'static str] = &[
         "#3b82f6", "#f97316", "#a855f7", "#14b8a6", "#f43f5e", "#84cc16", "#06b6d4", "#8b5cf6",
     ];
 
-    let mut metric_datasets = Vec::new();
+    let mut metric_datasets: Vec<ChartDataset<'_>> = Vec::new();
     for (i, name) in metric_names.iter().enumerate() {
         let color = colors[i % colors.len()];
-        let data: Vec<f64> = score_maps
+        let data: Vec<f64> = score_matrix
             .iter()
-            .map(|map| {
-                map.get(name.as_str())
+            .map(|row| {
+                row[i]
                     .map(|m| (m.total_penalty * 10.0).round() / 10.0)
                     .unwrap_or(0.0)
             })
             .collect();
-        metric_datasets.push(serde_json::json!({
-            "label": name,
-            "data": data,
-            "backgroundColor": color,
-            "borderColor": color,
-            "borderWidth": 1
-        }));
+        metric_datasets.push(ChartDataset {
+            label: name.as_str(),
+            data,
+            background_color: color,
+            border_color: color,
+            border_width: 1,
+        });
     }
     let datasets_json = json_for_html_script(&metric_datasets)?;
 
-    // Build table rows
-    let mut table_rows = String::new();
-    for (hs, score_map) in scores.iter().zip(score_maps.iter()) {
+    // Build table rows using write! to avoid repeated small allocations (#18).
+    // Pre-allocate a reasonable capacity based on the number of rows (#22).
+    const ESTIMATED_HTML_BYTES_PER_ROW: usize = 120;
+    const ESTIMATED_HTML_BYTES_PER_METRIC_CELL: usize = 60;
+    let row_estimate = scores.len()
+        * (ESTIMATED_HTML_BYTES_PER_ROW
+            + metric_names.len() * ESTIMATED_HTML_BYTES_PER_METRIC_CELL);
+    let mut table_rows = String::with_capacity(row_estimate);
+    for (hs, row) in scores.iter().zip(score_matrix.iter()) {
         let commit_label = hs
             .commit
             .as_deref()
             .map(|c| if c.len() > 12 { &c[..12] } else { c })
             .unwrap_or("-");
         let date_label = hs.timestamp.format("%Y-%m-%d %H:%M").to_string();
-        let metric_cells: String = metric_names
-            .iter()
-            .map(|name| {
-                let m = score_map.get(name.as_str()).copied();
-                match m {
-                    Some(m) => format!(
-                        r#"<td>{:.1}<br><small style="color:#888">{}</small></td>"#,
-                        m.total_penalty,
-                        htmlize::escape_text(&m.details)
-                    ),
-                    None => "<td>-</td>".to_string(),
-                }
-            })
-            .collect();
-        table_rows.push_str(&format!(
-            r#"<tr>
-                <td>{}</td>
-                <td>{}</td>
-                <td style="font-weight:bold">{:.1}</td>
-                {}
-            </tr>"#,
+        write!(
+            table_rows,
+            "<tr><td>{}</td><td>{}</td><td style=\"font-weight:bold\">{:.1}</td>",
             htmlize::escape_text(commit_label),
             htmlize::escape_text(&date_label),
-            hs.overall,
-            metric_cells
-        ));
+            hs.overall
+        )
+        .unwrap();
+        for cell in row {
+            match cell {
+                Some(m) => write!(
+                    table_rows,
+                    "<td>{:.1}<br><small style=\"color:#888\">{}</small></td>",
+                    m.total_penalty,
+                    htmlize::escape_text(&m.details)
+                )
+                .unwrap(),
+                None => table_rows.push_str("<td>-</td>"),
+            }
+        }
+        table_rows.push_str("</tr>");
     }
 
     let metric_headers: String = metric_names
@@ -120,7 +155,15 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
         .map(|n| format!("<th>{}</th>", htmlize::escape_text(n)))
         .collect();
 
-    Ok(format!(
+    // Pre-allocate the output buffer to avoid repeated reallocation (#22).
+    // The fixed HTML skeleton (boilerplate, styles, JS chart setup) is roughly 2 KB;
+    // add headroom for the metric_headers string and formatting overhead.
+    const HTML_SKELETON_BYTES: usize = 4096;
+    let html_estimate =
+        HTML_SKELETON_BYTES + table_rows.len() + labels_json.len() + datasets_json.len();
+    let mut html = String::with_capacity(html_estimate);
+    write!(
+        html,
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -183,6 +226,7 @@ new Chart(ctx, {{
         table_rows,
         labels_json,
         datasets_json,
-    ))
+    )
+    .unwrap();
+    Ok(html)
 }
-

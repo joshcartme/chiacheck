@@ -68,64 +68,73 @@ pub fn build_health_score(
     }
 }
 
-fn build_tree(mut file_map: HashMap<String, HashMap<String, f64>>) -> PenaltyNode {
-    let mut root = PenaltyNode {
-        path: String::new(),
-        penalties: HashMap::new(),
-        children: Vec::new(),
-    };
-
-    let mut sorted_paths: Vec<String> = file_map.keys().cloned().collect();
-    sorted_paths.sort();
-
-    for path in sorted_paths {
-        let file_penalties = file_map.remove(&path).unwrap();
-        insert_into_tree(&mut root, &path, file_penalties);
-    }
-
-    aggregate_penalties(&mut root);
-    root
+/// Mutable tree node used only during tree construction.
+/// Uses `HashMap<String, BuilderNode>` for O(1) child lookup (fixes #14).
+/// Penalties are propagated upward during insertion, so no second pass is
+/// needed after the tree is fully built (fixes #15, #16, #17).
+struct BuilderNode {
+    penalties: HashMap<String, f64>,
+    children: HashMap<String, BuilderNode>,
 }
 
-fn insert_into_tree(node: &mut PenaltyNode, path: &str, penalties: HashMap<String, f64>) {
-    if let Some(slash) = path.find('/') {
-        let dir = &path[..slash];
-        let rest = &path[slash + 1..];
-        if let Some(child) = node.children.iter_mut().find(|c| c.path == dir) {
-            insert_into_tree(child, rest, penalties);
+impl BuilderNode {
+    fn new() -> Self {
+        BuilderNode {
+            penalties: HashMap::new(),
+            children: HashMap::new(),
+        }
+    }
+
+    /// Insert a file's penalty map at `path` (relative, `/`-separated).
+    /// Accumulates penalties at every ancestor on the way down so that
+    /// directory nodes always reflect the full sum of their descendants.
+    fn insert(&mut self, path: &str, file_penalties: &HashMap<String, f64>) {
+        // Accumulate at this (ancestor/root) node.
+        for (k, v) in file_penalties {
+            *self.penalties.entry(k.clone()).or_insert(0.0) += v;
+        }
+        if let Some(slash) = path.find('/') {
+            let dir = &path[..slash];
+            let rest = &path[slash + 1..];
+            self.children
+                .entry(dir.to_string())
+                .or_insert_with(BuilderNode::new)
+                .insert(rest, file_penalties);
         } else {
-            let mut new_child = PenaltyNode {
-                path: dir.to_string(),
-                penalties: HashMap::new(),
-                children: Vec::new(),
-            };
-            insert_into_tree(&mut new_child, rest, penalties);
-            node.children.push(new_child);
+            // Leaf: create (or merge into an existing) leaf node.
+            let leaf = self
+                .children
+                .entry(path.to_string())
+                .or_insert_with(BuilderNode::new);
+            for (k, v) in file_penalties {
+                *leaf.penalties.entry(k.clone()).or_insert(0.0) += v;
+            }
         }
-    } else {
-        // Leaf file node.
-        node.children.push(PenaltyNode {
-            path: path.to_string(),
-            penalties,
-            children: Vec::new(),
-        });
+    }
+
+    /// Convert into the public `PenaltyNode` tree. Children are sorted by path
+    /// for deterministic output.
+    fn into_penalty_node(self, path: String) -> PenaltyNode {
+        let mut children: Vec<PenaltyNode> = self
+            .children
+            .into_iter()
+            .map(|(k, v)| v.into_penalty_node(k))
+            .collect();
+        children.sort_by(|a, b| a.path.cmp(&b.path));
+        PenaltyNode {
+            path,
+            penalties: self.penalties,
+            children,
+        }
     }
 }
 
-/// Propagates child penalties upward so each directory node's `penalties` map
-/// holds the sum of all descendant file penalties per metric.
-fn aggregate_penalties(node: &mut PenaltyNode) {
-    if node.children.is_empty() {
-        return; // leaf — penalties already set
+fn build_tree(file_map: HashMap<String, HashMap<String, f64>>) -> PenaltyNode {
+    let mut root = BuilderNode::new();
+    // No pre-sort needed: BuilderNode uses HashMap for O(1) child lookup (#16).
+    for (path, file_penalties) in file_map {
+        root.insert(&path, &file_penalties);
     }
-    for child in node.children.iter_mut() {
-        aggregate_penalties(child);
-    }
-    let mut agg: HashMap<String, f64> = HashMap::new();
-    for child in &node.children {
-        for (k, v) in &child.penalties {
-            *agg.entry(k.clone()).or_insert(0.0) += v;
-        }
-    }
-    node.penalties = agg;
+    // Root node accumulates all penalties during insertion, so no aggregate pass (#15).
+    root.into_penalty_node(String::new())
 }

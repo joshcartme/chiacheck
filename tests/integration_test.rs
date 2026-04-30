@@ -1,5 +1,5 @@
 use fiber::config::load_config;
-use fiber::metrics::runner::run_metric;
+use fiber::metrics::runner::{run_metric, run_all_metrics};
 use fiber::scorer::build_health_score;
 use chrono::Utc;
 use std::path::Path;
@@ -351,11 +351,11 @@ fn test_get_commits_in_range_no_duplicate_nonempty() {
         _ => return,
     };
     let mut seen = std::collections::HashSet::new();
-    for sha in &commits {
+    for info in &commits {
         assert!(
-            seen.insert(sha),
+            seen.insert(info.sha.as_str()),
             "Duplicate commit SHA in range result: {}",
-            sha
+            info.sha
         );
     }
 }
@@ -518,4 +518,215 @@ fn test_ast_missing_sub_feature_is_error() {
         "details: {}",
         result.details
     );
+}
+
+// --- lint text fallback -------------------------------------------------------
+
+#[test]
+fn test_lint_text_fallback() {
+    use fiber::config::MetricConfig;
+    // Non-JSON text output: 2 lines containing "error", 1 containing "warning".
+    // With default penalties: 2×1.0 + 1×0.5 = 2.5 unattributed.
+    let config = MetricConfig {
+        name: "lint_text".to_string(),
+        metric_type: "lint".to_string(),
+        command: Some(
+            "printf 'error: foo\\nwarning: bar\\nerror: baz\\n'".to_string(),
+        ),
+        error_penalty: None,
+        warning_penalty: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
+    };
+    let result = run_metric(&config, Path::new("."));
+    assert!(
+        (result.total_penalty - 2.5).abs() < 0.01,
+        "Expected 2.5, got {} (details: {})",
+        result.total_penalty,
+        result.details
+    );
+    assert!((result.unattributed - 2.5).abs() < 0.01);
+    assert!(result.attributed.is_empty());
+    assert!(
+        result.details.contains("text parse"),
+        "details should mention text parse: {}",
+        result.details
+    );
+}
+
+// --- ast CallExpression count -------------------------------------------------
+
+#[test]
+fn test_ast_count_node_call_expression() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    // 3 CallExpression nodes
+    std::fs::write(
+        dir.path().join("calls.ts"),
+        "foo(); bar(); baz();\n",
+    )
+    .unwrap();
+
+    let config = MetricConfig {
+        name: "calls".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: Some("CallExpression".to_string()),
+        comment_startswith: None,
+        comment_contains: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert!(
+        (result.total_penalty - 3.0).abs() < 0.01,
+        "Expected 3.0, got {} (details: {})",
+        result.total_penalty,
+        result.details
+    );
+    assert_eq!(result.attributed.len(), 1);
+}
+
+// --- ast unknown node name yields zero, no Error in details -------------------
+
+#[test]
+fn test_ast_count_node_unknown_yields_zero() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("x.ts"), "const a = 1;\n").unwrap();
+
+    let config = MetricConfig {
+        name: "unknown_node".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: Some("ThisNodeDoesNotExistInOxc9999".to_string()),
+        comment_startswith: None,
+        comment_contains: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert!(
+        (result.total_penalty - 0.0).abs() < 0.01,
+        "Expected 0.0, got {}",
+        result.total_penalty
+    );
+    assert!(
+        !result.details.starts_with("Error:"),
+        "details should NOT start with Error for zero matches: {}",
+        result.details
+    );
+}
+
+// --- generate_html_report smoke test -----------------------------------------
+
+#[test]
+fn test_generate_html_report_smoke() {
+    use fiber::report::generate_html_report;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let output = dir.path().join("report.html").to_string_lossy().to_string();
+
+    let metrics = vec![fiber::metrics::MetricResult {
+        name: "lint".to_string(),
+        total_penalty: 3.0,
+        attributed: vec![("src/foo.ts".to_string(), 3.0)],
+        unattributed: 0.0,
+        details: "3 errors, 0 warnings".to_string(),
+    }];
+    let hs = build_health_score(metrics, Some("abc1234".to_string()), Utc::now());
+    generate_html_report(&[hs], &output).expect("report generation should succeed");
+    let html = std::fs::read_to_string(&output).unwrap();
+    assert!(html.contains("<!DOCTYPE html>"), "should be valid HTML");
+    assert!(html.contains("abc1234"), "should contain commit sha");
+    assert!(html.contains("lint"), "should contain metric name");
+}
+
+// --- html script escape -------------------------------------------------------
+
+#[test]
+fn test_html_script_escape() {
+    use fiber::report::generate_html_report;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let output = dir.path().join("escaped.html").to_string_lossy().to_string();
+
+    // SHA that contains "</script>" — must never appear raw in the JSON labels.
+    let malicious_sha = "abc</script><script>alert(1)".to_string();
+    let metrics = vec![fiber::metrics::MetricResult {
+        name: "m".to_string(),
+        total_penalty: 1.0,
+        attributed: vec![],
+        unattributed: 1.0,
+        details: "1 issue".to_string(),
+    }];
+    let hs = build_health_score(metrics, Some(malicious_sha.clone()), Utc::now());
+    generate_html_report(&[hs], &output).expect("report should succeed");
+    let html = std::fs::read_to_string(&output).unwrap();
+    assert!(
+        !html.contains("</script><script>"),
+        "raw </script> injection must not appear in output HTML"
+    );
+}
+
+// --- run_all_metrics preserves order -----------------------------------------
+
+#[test]
+fn test_run_all_metrics_order_preserved() {
+    use fiber::config::MetricConfig;
+
+    let configs = vec![
+        MetricConfig {
+            name: "first".to_string(),
+            metric_type: "count".to_string(),
+            command: Some("echo 1".to_string()),
+            error_penalty: None,
+            warning_penalty: None,
+            files: None,
+            ast_count_node: None,
+            comment_startswith: None,
+            comment_contains: None,
+        },
+        MetricConfig {
+            name: "second".to_string(),
+            metric_type: "count".to_string(),
+            command: Some("echo 2".to_string()),
+            error_penalty: None,
+            warning_penalty: None,
+            files: None,
+            ast_count_node: None,
+            comment_startswith: None,
+            comment_contains: None,
+        },
+        MetricConfig {
+            name: "third".to_string(),
+            metric_type: "count".to_string(),
+            command: Some("echo 3".to_string()),
+            error_penalty: None,
+            warning_penalty: None,
+            files: None,
+            ast_count_node: None,
+            comment_startswith: None,
+            comment_contains: None,
+        },
+    ];
+
+    let results = run_all_metrics(&configs, Path::new("."));
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].name, "first");
+    assert_eq!(results[1].name, "second");
+    assert_eq!(results[2].name, "third");
+    assert!((results[0].total_penalty - 1.0).abs() < 0.01);
+    assert!((results[1].total_penalty - 2.0).abs() < 0.01);
+    assert!((results[2].total_penalty - 3.0).abs() < 0.01);
 }

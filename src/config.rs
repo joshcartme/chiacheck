@@ -33,9 +33,10 @@ pub fn load_config(path: &str) -> Result<Config> {
         .map_err(|e| FiberError::Config(format!("Invalid TOML in {}: {}", path, e)))?;
 
     let mut seen: HashSet<&str> = HashSet::new();
+    let mut reported: HashSet<&str> = HashSet::new();
     let mut duplicates: Vec<&str> = Vec::new();
     for m in &config.metrics {
-        if !seen.insert(m.name.as_str()) && !duplicates.contains(&m.name.as_str()) {
+        if !seen.insert(m.name.as_str()) && reported.insert(m.name.as_str()) {
             duplicates.push(m.name.as_str());
         }
     }

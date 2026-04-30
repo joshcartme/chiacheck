@@ -3,7 +3,8 @@ use chrono::Utc;
 use clap::Parser;
 use fiber::cli::{Cli, Commands};
 use fiber::config::load_config;
-use fiber::metrics::runner::run_metric;
+use fiber::git::CommitInfo;
+use fiber::metrics::runner::run_all_metrics;
 use fiber::scorer::{build_health_score, HealthScore};
 use fiber::{git, report};
 
@@ -20,7 +21,10 @@ fn print_score(score: &HealthScore) {
     if let Some(ref commit) = score.commit {
         println!("Commit: {}", &commit[..commit.len().min(12)]);
     }
-    println!("Total Penalty: {}{:.1}{}  (0 = perfect)", color, score.overall, reset);
+    println!(
+        "Total Penalty: {}{:.1}{}  (0 = perfect)",
+        color, score.overall, reset
+    );
     println!("{:-<50}", "");
     for m in &score.metrics {
         let mc = if m.total_penalty == 0.0 {
@@ -40,12 +44,18 @@ fn print_score(score: &HealthScore) {
 
 /// Check out each commit in `commits`, run metrics from `config_path`, then
 /// restore HEAD.  Returns the collected scores in chronological order.
-fn score_commits(commits: &[String], config_path: &str) -> Result<Vec<HealthScore>> {
+fn score_commits(commits: &[CommitInfo], config_path: &str) -> Result<Vec<HealthScore>> {
     let head_ref = git::get_head_ref()?;
     let mut scores: Vec<HealthScore> = Vec::new();
     let mut error_occurred = false;
 
-    for sha in commits {
+    // config_dir is pure path arithmetic — safe to compute once outside the loop.
+    let config_dir = std::path::Path::new(config_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+
+    for info in commits {
+        let sha = &info.sha;
         println!("Checking out {}...", &sha[..sha.len().min(8)]);
         if let Err(e) = git::checkout_commit(sha) {
             eprintln!("Warning: could not checkout {}: {}", sha, e);
@@ -61,18 +71,9 @@ fn score_commits(commits: &[String], config_path: &str) -> Result<Vec<HealthScor
                 continue;
             }
         };
-        let config_dir = std::path::Path::new(config_path)
-            .parent()
-            .unwrap_or(std::path::Path::new("."));
-        let results: Vec<_> = config
-            .metrics
-            .iter()
-            .map(|m| run_metric(m, config_dir))
-            .collect();
-        let date = git::get_commit_date(sha).unwrap_or_default();
-        let timestamp = chrono::DateTime::parse_from_str(&date, "%Y-%m-%d %H:%M:%S %z")
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now());
+        let results = run_all_metrics(&config.metrics, config_dir);
+        let timestamp =
+            chrono::DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
         scores.push(build_health_score(results, Some(sha.clone()), timestamp));
     }
 
@@ -105,11 +106,7 @@ fn run_score_command(config_path: &str) -> Result<HealthScore> {
     let config_dir = std::path::Path::new(config_path)
         .parent()
         .unwrap_or(std::path::Path::new("."));
-    let results: Vec<_> = config
-        .metrics
-        .iter()
-        .map(|m| run_metric(m, config_dir))
-        .collect();
+    let results = run_all_metrics(&config.metrics, config_dir);
     Ok(build_health_score(
         results,
         git::get_current_commit().ok(),
