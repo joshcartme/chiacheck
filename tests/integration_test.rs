@@ -54,6 +54,29 @@ fn test_count_metric() {
 }
 
 #[test]
+fn test_lint_metric() {
+    use fiber::config::MetricConfig;
+    // ESLint-style JSON array: empty → no errors or warnings
+    let config = MetricConfig {
+        name: "lint".to_string(),
+        metric_type: "lint".to_string(),
+        weight: 10.0,
+        command: "echo '[]'".to_string(),
+        error_penalty: None,
+        warning_penalty: None,
+        min_threshold: None,
+        max_count: None,
+    };
+    let result = run_metric(&config);
+    assert!(
+        (result.score - 100.0).abs() < 0.01,
+        "Expected 100 for empty lint JSON, got {}",
+        result.score
+    );
+    assert!(result.details.contains("0 errors"), "details: {}", result.details);
+}
+
+#[test]
 fn test_score_metric() {
     use fiber::config::MetricConfig;
     let config = MetricConfig {

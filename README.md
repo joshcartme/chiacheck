@@ -49,8 +49,8 @@ Fiber reads `fiber.toml` from the current working directory. The file contains a
 
 | Field | Type | Used by | Description |
 |---|---|---|---|
-| `error_penalty` | float | `eslint`, `oxlint` | Score deduction per error (default: 1.0) |
-| `warning_penalty` | float | `eslint`, `oxlint` | Score deduction per warning (default: 0.5) |
+| `error_penalty` | float | `lint` | Score deduction per error (default: 1.0) |
+| `warning_penalty` | float | `lint` | Score deduction per warning (default: 0.5) |
 | `min_threshold` | float | `coverage` | Minimum acceptable coverage % (default: 0) |
 | `max_count` | float | `count` | Maximum expected count; used to compute score (default: 100) |
 
@@ -58,30 +58,31 @@ Fiber reads `fiber.toml` from the current working directory. The file contains a
 
 ## Metric Types
 
-### `eslint`
-Runs an ESLint command and parses JSON output (`--format json`). Falls back to text scanning.
+### `lint`
+Runs a linter via shell `command` and scores from its output. Parses a **JSON array** of per-file objects with `errorCount` and `warningCount` (same shape as ESLint’s `--format json`). If that fails, falls back to counting output lines containing `error` or `warning`. Linters that use a different JSON shape can still use the text fallback, or use another metric type (`count`, `score`, etc.).
+
+**Score** = `100 - errors × error_penalty - warnings × warning_penalty`
+
+Add one `[[metrics]]` block per linter (distinct `name` and `command`).
+
+#### ESLint example
 
 ```toml
 [[metrics]]
 name = "eslint"
-type = "eslint"
+type = "lint"
 weight = 30.0
 command = "npx eslint . --format json"
 error_penalty = 1.0
 warning_penalty = 0.5
 ```
 
-**Score** = `100 - errors × error_penalty - warnings × warning_penalty`
-
----
-
-### `oxlint`
-Same as `eslint` but for oxlint output.
+#### Oxlint example
 
 ```toml
 [[metrics]]
 name = "oxlint"
-type = "oxlint"
+type = "lint"
 weight = 20.0
 command = "npx oxlint . --format json"
 error_penalty = 1.0

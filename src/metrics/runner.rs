@@ -23,7 +23,7 @@ fn clamp(val: f64) -> f64 {
 
 pub fn run_metric(config: &MetricConfig) -> MetricResult {
     let result = match config.metric_type.as_str() {
-        "eslint" | "oxlint" => run_lint_tool(config),
+        "lint" => run_lint_tool(config),
         "coverage" => run_coverage(config),
         "count" => run_count(config),
         "percentage" => run_percentage(config),
@@ -47,9 +47,8 @@ pub fn run_metric(config: &MetricConfig) -> MetricResult {
     }
 }
 
-/// Shared implementation for lint-style tools (eslint, oxlint).
-/// Parses JSON array output with `errorCount`/`warningCount` per file,
-/// falling back to counting lines containing "error"/"warning".
+/// Parses JSON array output with `errorCount`/`warningCount` per file
+/// (ESLint-style), falling back to counting lines containing "error"/"warning".
 fn run_lint_tool(config: &MetricConfig) -> Result<(f64, String), String> {
     let output = run_command(&config.command)?;
 

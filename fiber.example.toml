@@ -1,9 +1,10 @@
 # Fiber configuration example
 # Copy to fiber.toml and customize
+# Add more [[metrics]] with type = "lint" to run additional linters.
 
 [[metrics]]
 name = "eslint"
-type = "eslint"
+type = "lint"
 weight = 30.0
 command = "npx eslint . --format json"
 error_penalty = 1.0
@@ -11,7 +12,7 @@ warning_penalty = 0.5
 
 [[metrics]]
 name = "oxlint"
-type = "oxlint"
+type = "lint"
 weight = 20.0
 command = "npx oxlint . --format json"
 error_penalty = 1.0
