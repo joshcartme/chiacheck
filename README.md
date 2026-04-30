@@ -38,27 +38,32 @@ Fiber reads `fiber.toml` from the current working directory. The file contains a
 
 ### Common fields
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | ✅ | Display name for the metric |
-| `type` | string | ✅ | Metric type (see below) |
-| `weight` | float | ✅ | Relative weight in the overall score |
-| `command` | string | ✅ | Shell command to run |
+| Field     | Type         | Required                    | Description                                                       |
+| --------- | ------------ | --------------------------- | ----------------------------------------------------------------- |
+| `name`    | string       | ✅                          | Display name for the metric                                       |
+| `type`    | string       | ✅                          | Metric type (see below)                                           |
+| `weight`  | float        | ✅                          | Relative weight in the overall score                              |
+| `command` | string       | ✅ (not required for `ast`) | Shell command to run                                              |
+| `files`   | string array | `ast` only                  | Glob patterns for JS/TS files to parse (relative to `fiber.toml`) |
 
 ### Type-specific fields
 
-| Field | Type | Used by | Description |
-|---|---|---|---|
-| `error_penalty` | float | `lint` | Score deduction per error (default: 1.0) |
-| `warning_penalty` | float | `lint` | Score deduction per warning (default: 0.5) |
-| `min_threshold` | float | `coverage` | Minimum acceptable coverage % (default: 0) |
-| `max_count` | float | `count` | Maximum expected count; used to compute score (default: 100) |
+| Field                | Type         | Used by       | Description                                                  |
+| -------------------- | ------------ | ------------- | ------------------------------------------------------------ |
+| `error_penalty`      | float        | `lint`, `ast` | Score deduction per error/match (default: 1.0)               |
+| `warning_penalty`    | float        | `lint`        | Score deduction per warning (default: 0.5)                   |
+| `min_threshold`      | float        | `coverage`    | Minimum acceptable coverage % (default: 0)                   |
+| `max_count`          | float        | `count`       | Maximum expected count; used to compute score (default: 100) |
+| `ast_count_node`     | string       | `ast`         | AST node type to count (e.g. `"TSAnyKeyword"`)               |
+| `comment_startswith` | string array | `ast`         | Count comments whose trimmed text starts with any entry      |
+| `comment_contains`   | string array | `ast`         | Count comments whose text contains any entry                 |
 
 ---
 
 ## Metric Types
 
 ### `lint`
+
 Runs a linter via shell `command` and scores from its output. Parses a **JSON array** of per-file objects with `errorCount` and `warningCount` (same shape as ESLint’s `--format json`). If that fails, falls back to counting output lines containing `error` or `warning`. Linters that use a different JSON shape can still use the text fallback, or use another metric type (`count`, `score`, etc.).
 
 **Score** = `100 - errors × error_penalty - warnings × warning_penalty`
@@ -92,7 +97,9 @@ warning_penalty = 0.5
 ---
 
 ### `coverage`
+
 Parses test coverage output. Supports:
+
 - JSON with `{ "total": { "lines": { "pct": 84.2 } } }` (Istanbul/c8 format)
 - Plain numeric output (e.g. `echo 84.2`)
 
@@ -110,6 +117,7 @@ min_threshold = 60.0
 ---
 
 ### `count`
+
 Expects a command that outputs a single integer — the number of issues. Score is computed as how far below `max_count` you are.
 
 ```toml
@@ -126,6 +134,7 @@ max_count = 50.0
 ---
 
 ### `percentage`
+
 Expects a command that outputs a percentage value (with or without `%`).
 
 ```toml
@@ -141,6 +150,7 @@ command = "scripts/axe-score.sh"
 ---
 
 ### `score`
+
 Expects a command that outputs a raw score between 0 and 100.
 
 ```toml
@@ -155,7 +165,60 @@ command = "scripts/my-score.sh"
 
 ---
 
-## CLI Commands
+### `ast`
+
+Parses JavaScript and TypeScript files in-process with [oxc-parser](https://oxc.rs/docs/guide/usage/parser.html) and counts matches using one of three sub-features (set exactly one per metric).
+
+**Common fields:**
+
+- `files` — one or more glob patterns for source files to parse, resolved relative to `fiber.toml`
+- `error_penalty` — score deduction per match (default: `1.0`)
+
+**Score** = `max(0, 100 - match_count × error_penalty)`
+
+#### `ast_count_node` — count AST nodes by type
+
+Counts occurrences of any [AstKind](https://docs.rs/oxc_ast/latest/oxc_ast/generated/ast_kind/enum.AstKind.html) variant across all matched files.
+
+```toml
+[[metrics]]
+name = "no_ts_any"
+type = "ast"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+ast_count_node = "TSAnyKeyword"
+error_penalty = 5.0
+weight = 15.0
+```
+
+#### `comment_startswith` — count comments by prefix
+
+Counts comments whose trimmed text starts with any of the given strings (case-sensitive). Matches both `//` and `/* */` comments.
+
+```toml
+[[metrics]]
+name = "eslint_disable_comments"
+type = "ast"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+comment_startswith = ["eslint-disable"]
+error_penalty = 2.0
+weight = 10.0
+```
+
+#### `comment_contains` — count comments by substring
+
+Counts comments whose text contains any of the given strings (case-sensitive).
+
+```toml
+[[metrics]]
+name = "banned_comment_patterns"
+type = "ast"
+files = ["src/**/*.ts"]
+comment_contains = ["TODO", "FIXME", "HACK"]
+error_penalty = 1.0
+weight = 5.0
+```
+
+---
 
 ### `fiber score`
 
@@ -186,10 +249,10 @@ Calculate health scores for a range of git commits.
 fiber range --from <SHA> --to <SHA> [--output report.html]
 ```
 
-| Flag | Description |
-|---|---|
-| `--from` | Start commit SHA |
-| `--to` | End commit SHA (inclusive) |
+| Flag       | Description                           |
+| ---------- | ------------------------------------- |
+| `--from`   | Start commit SHA                      |
+| `--to`     | End commit SHA (inclusive)            |
 | `--output` | Optional path to write an HTML report |
 
 Fiber will check out each commit in the range, run metrics, restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
@@ -208,11 +271,11 @@ Calculate health scores for commits within a date range.
 fiber history [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days N] [--output report.html]
 ```
 
-| Flag | Description |
-|---|---|
-| `--from` | Start date (ISO 8601) |
-| `--to` | End date (ISO 8601) |
-| `--days` | Shorthand: last N days |
+| Flag       | Description                           |
+| ---------- | ------------------------------------- |
+| `--from`   | Start date (ISO 8601)                 |
+| `--to`     | End date (ISO 8601)                   |
+| `--days`   | Shorthand: last N days                |
 | `--output` | Optional path to write an HTML report |
 
 ```bash
@@ -233,8 +296,7 @@ When `--output` is provided to `range` or `history`, Fiber generates an HTML rep
 - A **data table** with per-commit scores and metric details
 - Colour coding: 🟢 ≥80, 🟡 ≥60, 🔴 <60
 
-Note: if the generated report loads **Chart.js** from a CDN, viewing the chart requires network access unless Chart.js is bundled separately.
----
+## Note: if the generated report loads **Chart.js** from a CDN, viewing the chart requires network access unless Chart.js is bundled separately.
 
 ## Custom Metrics Guide
 

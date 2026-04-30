@@ -1,5 +1,11 @@
 use crate::config::MetricConfig;
 use crate::metrics::MetricResult;
+use oxc_allocator::Allocator;
+use oxc_ast::AstKind;
+use oxc_ast_visit::Visit;
+use oxc_parser::{ParseOptions, Parser};
+use oxc_span::SourceType;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn run_command(command: &str) -> Result<String, String> {
@@ -11,7 +17,11 @@ fn run_command(command: &str) -> Result<String, String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Command failed ({}): {}", output.status, stderr.trim()));
+        return Err(format!(
+            "Command failed ({}): {}",
+            output.status,
+            stderr.trim()
+        ));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -21,13 +31,14 @@ fn clamp(val: f64) -> f64 {
     val.clamp(0.0, 100.0)
 }
 
-pub fn run_metric(config: &MetricConfig) -> MetricResult {
+pub fn run_metric(config: &MetricConfig, config_dir: &Path) -> MetricResult {
     let result = match config.metric_type.as_str() {
         "lint" => run_lint_tool(config),
         "coverage" => run_coverage(config),
         "count" => run_count(config),
         "percentage" => run_percentage(config),
         "score" => run_score_type(config),
+        "ast" => run_ast(config, config_dir),
         other => Err(format!("Unknown metric type: {}", other)),
     };
 
@@ -162,4 +173,121 @@ fn run_score_type(config: &MetricConfig) -> Result<(f64, String), String> {
         Ok(score) => Ok((score, format!("score: {:.1}", score))),
         Err(_) => Err(format!("Cannot parse score output: {}", trimmed)),
     }
+}
+
+fn resolve_files(patterns: &[String], config_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for pattern in patterns {
+        let full_pattern = config_dir.join(pattern);
+        let full_pattern_str = full_pattern.to_string_lossy();
+        let entries = glob::glob(&full_pattern_str)
+            .map_err(|e| format!("Invalid glob pattern '{}': {}", pattern, e))?;
+        for entry in entries {
+            match entry {
+                Ok(path) => paths.push(path),
+                Err(e) => eprintln!("Warning: glob error: {}", e),
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        return Err(format!(
+            "No files matched patterns: {}",
+            patterns.join(", ")
+        ));
+    }
+    Ok(paths)
+}
+
+struct AstNodeCounter {
+    target: String,
+    count: usize,
+}
+
+impl<'a> Visit<'a> for AstNodeCounter {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        // AstKind debug format: "VariantName(...)" for nodes with data, or "VariantName" for unit.
+        // Split on '(' to extract just the variant name.
+        let debug = format!("{:?}", kind);
+        let variant_name = debug.split('(').next().unwrap_or("").trim();
+        if variant_name == self.target {
+            self.count += 1;
+        }
+    }
+}
+
+fn run_ast(config: &MetricConfig, config_dir: &Path) -> Result<(f64, String), String> {
+    let has_count_node = config.ast_count_node.is_some();
+    let has_startswith = config.comment_startswith.is_some();
+    let has_contains = config.comment_contains.is_some();
+    let feature_count = [has_count_node, has_startswith, has_contains]
+        .iter()
+        .filter(|&&b| b)
+        .count();
+    if feature_count == 0 {
+        return Err(
+            "ast metric requires exactly one of: ast_count_node, comment_startswith, comment_contains"
+                .to_string(),
+        );
+    }
+    if feature_count > 1 {
+        return Err(
+            "ast metric allows only one of: ast_count_node, comment_startswith, comment_contains"
+                .to_string(),
+        );
+    }
+
+    let patterns = config
+        .files
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| "ast metric requires `files` to be set and non-empty".to_string())?;
+    let file_paths = resolve_files(patterns, config_dir)?;
+    let file_count = file_paths.len();
+    let error_penalty = config.error_penalty.unwrap_or(1.0);
+    let mut total_count: usize = 0;
+
+    for path in &file_paths {
+        let source_text = std::fs::read_to_string(path)
+            .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?;
+        let source_type = SourceType::from_path(path).unwrap_or_default();
+        let allocator = Allocator::default();
+        let ret = Parser::new(&allocator, &source_text, source_type)
+            .with_options(ParseOptions {
+                parse_regular_expression: true,
+                ..ParseOptions::default()
+            })
+            .parse();
+
+        if let Some(target) = &config.ast_count_node {
+            let mut counter = AstNodeCounter {
+                target: target.clone(),
+                count: 0,
+            };
+            counter.visit_program(&ret.program);
+            total_count += counter.count;
+        } else if let Some(needles) = &config.comment_startswith {
+            for comment in &ret.program.comments {
+                let value = comment.content_span().source_text(&source_text);
+                let trimmed = value.trim_start();
+                if needles.iter().any(|p| trimmed.starts_with(p.as_str())) {
+                    total_count += 1;
+                }
+            }
+        } else if let Some(needles) = &config.comment_contains {
+            for comment in &ret.program.comments {
+                let value = comment.content_span().source_text(&source_text);
+                if needles.iter().any(|p| value.contains(p.as_str())) {
+                    total_count += 1;
+                }
+            }
+        }
+    }
+
+    let score = clamp(100.0 - total_count as f64 * error_penalty);
+    Ok((
+        score,
+        format!("{} matches across {} files", total_count, file_count),
+    ))
 }

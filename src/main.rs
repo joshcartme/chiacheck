@@ -61,7 +61,14 @@ fn score_commits(commits: &[String], config_path: &str) -> Result<Vec<HealthScor
                 continue;
             }
         };
-        let results: Vec<_> = config.metrics.iter().map(run_metric).collect();
+        let config_dir = std::path::Path::new(config_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        let results: Vec<_> = config
+            .metrics
+            .iter()
+            .map(|m| run_metric(m, config_dir))
+            .collect();
         let overall = calculate_score(&results);
         let date = git::get_commit_date(sha).unwrap_or_default();
         scores.push(HealthScore {
@@ -100,7 +107,14 @@ fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> 
 
 fn run_score_command(config_path: &str) -> Result<HealthScore> {
     let config = load_config(config_path)?;
-    let results: Vec<_> = config.metrics.iter().map(run_metric).collect();
+    let config_dir = std::path::Path::new(config_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let results: Vec<_> = config
+        .metrics
+        .iter()
+        .map(|m| run_metric(m, config_dir))
+        .collect();
     let overall = calculate_score(&results);
     Ok(HealthScore {
         overall,
@@ -165,7 +179,13 @@ fn main() -> Result<()> {
             days,
             output,
         } => {
-            run_history_command(from.as_deref(), to.as_deref(), days, output.as_deref(), config_path)?;
+            run_history_command(
+                from.as_deref(),
+                to.as_deref(),
+                days,
+                output.as_deref(),
+                config_path,
+            )?;
         }
     }
     Ok(())

@@ -13,6 +13,12 @@ anyhow = "1"
 thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
 htmlize = "1"
+oxc_allocator = "0.127"
+oxc_parser = "0.127"
+oxc_span = "0.127"
+oxc_ast = "0.127"
+oxc_ast_visit = "0.127"
+glob = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

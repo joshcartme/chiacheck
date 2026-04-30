@@ -16,6 +16,10 @@ pub struct MetricConfig {
     pub warning_penalty: Option<f64>,
     pub min_threshold: Option<f64>,
     pub max_count: Option<f64>,
+    pub files: Option<Vec<String>>,
+    pub ast_count_node: Option<String>,
+    pub comment_startswith: Option<Vec<String>>,
+    pub comment_contains: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

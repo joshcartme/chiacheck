@@ -1,6 +1,7 @@
 use fiber::config::load_config;
 use fiber::metrics::runner::run_metric;
 use fiber::scorer::calculate_score;
+use std::path::Path;
 
 #[test]
 fn test_config_parsing() {
@@ -44,8 +45,12 @@ fn test_count_metric() {
         warning_penalty: None,
         min_threshold: None,
         max_count: Some(100.0),
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
     };
-    let result = run_metric(&config);
+    let result = run_metric(&config, Path::new("."));
     assert!(
         (result.score - 90.0).abs() < 0.01,
         "Expected 90, got {}",
@@ -66,21 +71,29 @@ fn test_lint_metric() {
         warning_penalty: None,
         min_threshold: None,
         max_count: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
     };
-    let result = run_metric(&config);
+    let result = run_metric(&config, Path::new("."));
     assert!(
         (result.score - 100.0).abs() < 0.01,
         "Expected 100 for empty lint JSON, got {}",
         result.score
     );
-    assert!(result.details.contains("0 errors"), "details: {}", result.details);
+    assert!(
+        result.details.contains("0 errors"),
+        "details: {}",
+        result.details
+    );
 }
 
 #[test]
 fn test_score_metric() {
     use fiber::config::MetricConfig;
     let config = MetricConfig {
-        name: "custom".to_string(),
+        name: "sc".to_string(),
         metric_type: "score".to_string(),
         weight: 10.0,
         command: "echo 85".to_string(),
@@ -88,8 +101,12 @@ fn test_score_metric() {
         warning_penalty: None,
         min_threshold: None,
         max_count: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
     };
-    let result = run_metric(&config);
+    let result = run_metric(&config, Path::new("."));
     assert!(
         (result.score - 85.0).abs() < 0.01,
         "Expected 85, got {}",
@@ -109,8 +126,12 @@ fn test_percentage_metric() {
         warning_penalty: None,
         min_threshold: None,
         max_count: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
     };
-    let result = run_metric(&config);
+    let result = run_metric(&config, Path::new("."));
     assert!(
         (result.score - 72.5).abs() < 0.01,
         "Expected 72.5, got {}",
@@ -133,8 +154,12 @@ fn test_coverage_above_threshold() {
         warning_penalty: None,
         min_threshold: Some(80.0),
         max_count: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
     };
-    let result = run_metric(&config);
+    let result = run_metric(&config, Path::new("."));
     assert!(
         (result.score - 90.0).abs() < 0.01,
         "Expected 90.0, got {}",
@@ -155,8 +180,12 @@ fn test_coverage_below_threshold_linear() {
         warning_penalty: None,
         min_threshold: Some(80.0),
         max_count: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
     };
-    let result = run_metric(&config);
+    let result = run_metric(&config, Path::new("."));
     assert!(
         (result.score - 62.5).abs() < 0.01,
         "Expected 62.5 (proportional), got {}",
@@ -177,8 +206,12 @@ fn test_coverage_no_threshold() {
         warning_penalty: None,
         min_threshold: None,
         max_count: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
     };
-    let result = run_metric(&config);
+    let result = run_metric(&config, Path::new("."));
     assert!(
         (result.score - 65.0).abs() < 0.01,
         "Expected 65.0, got {}",
@@ -201,8 +234,12 @@ fn test_failing_command_surfaces_error() {
         warning_penalty: None,
         min_threshold: None,
         max_count: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
     };
-    let result = run_metric(&config);
+    let result = run_metric(&config, Path::new("."));
     assert_eq!(result.score, 0.0, "failing command should yield score 0");
     assert!(
         result.details.starts_with("Error:"),
@@ -239,6 +276,196 @@ fn test_get_commits_in_range_no_duplicate_nonempty() {
     // No SHA should appear more than once.
     let mut seen = std::collections::HashSet::new();
     for sha in &commits {
-        assert!(seen.insert(sha), "Duplicate commit SHA in range result: {}", sha);
+        assert!(
+            seen.insert(sha),
+            "Duplicate commit SHA in range result: {}",
+            sha
+        );
     }
+}
+
+// --- ast metric type ----------------------------------------------------------
+
+#[test]
+fn test_ast_count_node_ts_any() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("sample.ts"),
+        "const x: any = 1;\nconst y: any = 2;\nconst z: string = 'ok';\n",
+    )
+    .unwrap();
+
+    let config = MetricConfig {
+        name: "no_any".to_string(),
+        metric_type: "ast".to_string(),
+        weight: 10.0,
+        command: String::new(),
+        error_penalty: Some(10.0),
+        warning_penalty: None,
+        min_threshold: None,
+        max_count: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: Some("TSAnyKeyword".to_string()),
+        comment_startswith: None,
+        comment_contains: None,
+    };
+    let result = run_metric(&config, dir.path());
+    // 2 TSAnyKeyword nodes × penalty 10 → score = 80
+    assert!(
+        (result.score - 80.0).abs() < 0.01,
+        "Expected 80.0, got {} (details: {})",
+        result.score,
+        result.details
+    );
+    assert!(
+        result.details.contains("2 matches"),
+        "details: {}",
+        result.details
+    );
+}
+
+#[test]
+fn test_ast_comment_startswith() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("a.ts"),
+        "// eslint-disable-next-line no-console\nconsole.log('hi');\n// not a disable\n",
+    )
+    .unwrap();
+
+    let config = MetricConfig {
+        name: "no_eslint_disable".to_string(),
+        metric_type: "ast".to_string(),
+        weight: 10.0,
+        command: String::new(),
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        min_threshold: None,
+        max_count: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: None,
+        comment_startswith: Some(vec!["eslint-disable".to_string()]),
+        comment_contains: None,
+    };
+    let result = run_metric(&config, dir.path());
+    // 1 matching comment → score = 99
+    assert!(
+        (result.score - 99.0).abs() < 0.01,
+        "Expected 99.0, got {} (details: {})",
+        result.score,
+        result.details
+    );
+    assert!(
+        result.details.contains("1 matches"),
+        "details: {}",
+        result.details
+    );
+}
+
+#[test]
+fn test_ast_comment_contains() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("b.ts"),
+        "// TODO: fix this later\nconst x = 1;\n// this is fine\n// FIXME: broken\n",
+    )
+    .unwrap();
+
+    let config = MetricConfig {
+        name: "no_todos".to_string(),
+        metric_type: "ast".to_string(),
+        weight: 10.0,
+        command: String::new(),
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        min_threshold: None,
+        max_count: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: Some(vec!["TODO".to_string(), "FIXME".to_string()]),
+    };
+    let result = run_metric(&config, dir.path());
+    // 2 matching comments → score = 98
+    assert!(
+        (result.score - 98.0).abs() < 0.01,
+        "Expected 98.0, got {} (details: {})",
+        result.score,
+        result.details
+    );
+    assert!(
+        result.details.contains("2 matches"),
+        "details: {}",
+        result.details
+    );
+}
+
+#[test]
+fn test_ast_no_files_match_is_error() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+
+    let config = MetricConfig {
+        name: "no_any".to_string(),
+        metric_type: "ast".to_string(),
+        weight: 10.0,
+        command: String::new(),
+        error_penalty: None,
+        warning_penalty: None,
+        min_threshold: None,
+        max_count: None,
+        files: Some(vec!["nonexistent/**/*.ts".to_string()]),
+        ast_count_node: Some("TSAnyKeyword".to_string()),
+        comment_startswith: None,
+        comment_contains: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert_eq!(result.score, 0.0, "no files should yield score 0");
+    assert!(
+        result.details.starts_with("Error:"),
+        "details should start with Error:, got: {}",
+        result.details
+    );
+}
+
+#[test]
+fn test_ast_missing_sub_feature_is_error() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("c.ts"), "const x = 1;\n").unwrap();
+
+    let config = MetricConfig {
+        name: "bad".to_string(),
+        metric_type: "ast".to_string(),
+        weight: 10.0,
+        command: String::new(),
+        error_penalty: None,
+        warning_penalty: None,
+        min_threshold: None,
+        max_count: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert_eq!(result.score, 0.0);
+    assert!(
+        result.details.starts_with("Error:"),
+        "details: {}",
+        result.details
+    );
 }

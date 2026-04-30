@@ -37,3 +37,27 @@ name = "custom_score"
 type = "score"
 weight = 10.0
 command = "scripts/my-score.sh"
+
+[[metrics]]
+name = "no_ts_any"
+type = "ast"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+ast_count_node = "TSAnyKeyword"
+error_penalty = 5.0
+weight = 15.0
+
+[[metrics]]
+name = "eslint_disable_comments"
+type = "ast"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+comment_startswith = ["eslint-disable"]
+error_penalty = 2.0
+weight = 10.0
+
+[[metrics]]
+name = "banned_comment_patterns"
+type = "ast"
+files = ["src/**/*.ts"]
+comment_contains = ["TODO", "FIXME", "HACK"]
+error_penalty = 1.0
+weight = 5.0
