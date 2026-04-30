@@ -1,6 +1,6 @@
 # 🧵 Fiber
 
-**Fiber** is a CLI tool that calculates a frontend health score for your project by running configurable metrics (linting, test coverage, type errors, custom scripts) and producing a weighted overall score. It can also compute scores over a range of git commits and generate an HTML trend report.
+**Fiber** is a CLI tool that measures the health of a frontend project by running configurable metrics (linting, test coverage, type errors, custom scripts) and accumulating a **penalty score**. A score of `0` is perfect; higher values mean more issues were found. It can also compute scores over a range of git commits and generate an HTML trend report.
 
 ---
 
@@ -40,23 +40,20 @@ Fiber reads `fiber.toml` from the current working directory. The file contains a
 
 | Field     | Type         | Required                    | Description                                                       |
 | --------- | ------------ | --------------------------- | ----------------------------------------------------------------- |
-| `name`    | string       | ✅                          | Display name for the metric                                       |
+| `name`    | string       | ✅                          | Unique display name for the metric                                |
 | `type`    | string       | ✅                          | Metric type (see below)                                           |
-| `weight`  | float        | ✅                          | Relative weight in the overall score                              |
 | `command` | string       | ✅ (not required for `ast`) | Shell command to run                                              |
 | `files`   | string array | `ast` only                  | Glob patterns for JS/TS files to parse (relative to `fiber.toml`) |
 
 ### Type-specific fields
 
-| Field                | Type         | Used by       | Description                                                  |
-| -------------------- | ------------ | ------------- | ------------------------------------------------------------ |
-| `error_penalty`      | float        | `lint`, `ast` | Score deduction per error/match (default: 1.0)               |
-| `warning_penalty`    | float        | `lint`        | Score deduction per warning (default: 0.5)                   |
-| `min_threshold`      | float        | `coverage`    | Minimum acceptable coverage % (default: 0)                   |
-| `max_count`          | float        | `count`       | Maximum expected count; used to compute score (default: 100) |
-| `ast_count_node`     | string       | `ast`         | AST node type to count (e.g. `"TSAnyKeyword"`)               |
-| `comment_startswith` | string array | `ast`         | Count comments whose trimmed text starts with any entry      |
-| `comment_contains`   | string array | `ast`         | Count comments whose text contains any entry                 |
+| Field                | Type         | Used by       | Description                                             |
+| -------------------- | ------------ | ------------- | ------------------------------------------------------- |
+| `error_penalty`      | float        | `lint`, `ast` | Penalty per error or AST match (default: 1.0)           |
+| `warning_penalty`    | float        | `lint`        | Penalty per warning (default: 0.5)                      |
+| `ast_count_node`     | string       | `ast`         | AST node type to count (e.g. `"TSAnyKeyword"`)          |
+| `comment_startswith` | string array | `ast`         | Count comments whose trimmed text starts with any entry |
+| `comment_contains`   | string array | `ast`         | Count comments whose text contains any entry            |
 
 ---
 
@@ -64,9 +61,9 @@ Fiber reads `fiber.toml` from the current working directory. The file contains a
 
 ### `lint`
 
-Runs a linter via shell `command` and scores from its output. Parses a **JSON array** of per-file objects with `errorCount` and `warningCount` (same shape as ESLint’s `--format json`). If that fails, falls back to counting output lines containing `error` or `warning`. Linters that use a different JSON shape can still use the text fallback, or use another metric type (`count`, `score`, etc.).
+Runs a linter via shell `command` and computes penalty from its output. Prefers a **JSON array** of per-file objects with `filePath`, `errorCount`, and `warningCount` (ESLint `--format json` shape). Penalties are **attributed per file**. If JSON parsing fails, falls back to counting lines containing `error` or `warning` (case-insensitive); those penalties are **unattributed**.
 
-**Score** = `100 - errors × error_penalty - warnings × warning_penalty`
+**Penalty per file** = `errors × error_penalty + warnings × warning_penalty`
 
 Add one `[[metrics]]` block per linter (distinct `name` and `command`).
 
@@ -76,7 +73,6 @@ Add one `[[metrics]]` block per linter (distinct `name` and `command`).
 [[metrics]]
 name = "eslint"
 type = "lint"
-weight = 30.0
 command = "npx eslint . --format json"
 error_penalty = 1.0
 warning_penalty = 0.5
@@ -88,7 +84,6 @@ warning_penalty = 0.5
 [[metrics]]
 name = "oxlint"
 type = "lint"
-weight = 20.0
 command = "npx oxlint . --format json"
 error_penalty = 1.0
 warning_penalty = 0.5
@@ -98,70 +93,61 @@ warning_penalty = 0.5
 
 ### `coverage`
 
-Parses test coverage output. Supports:
+Parses test coverage output. Prefers Istanbul/c8 JSON where per-file entries carry `[filePath].lines.pct`. Each file whose coverage is less than 100% contributes an **attributed** penalty. Falls back to `total.lines.pct`, then to a raw numeric percentage on stdout — both produce an **unattributed** penalty.
 
-- JSON with `{ "total": { "lines": { "pct": 84.2 } } }` (Istanbul/c8 format)
-- Plain numeric output (e.g. `echo 84.2`)
+**Penalty per file** = `100 - coverage_pct` (files at 100% contribute 0 and are omitted)
 
 ```toml
 [[metrics]]
 name = "test_coverage"
 type = "coverage"
-weight = 30.0
 command = "npx vitest run --coverage --reporter=json 2>/dev/null | tail -1"
-min_threshold = 60.0
 ```
-
-**Score** = coverage % (scaled down proportionally if below `min_threshold`)
 
 ---
 
 ### `count`
 
-Expects a command that outputs a single integer — the number of issues. Score is computed as how far below `max_count` you are.
+Expects a command that outputs a single number — the count of issues found. The raw value is the **unattributed penalty**.
 
 ```toml
 [[metrics]]
 name = "typescript_errors"
 type = "count"
-weight = 20.0
 command = "npx tsc --noEmit 2>&1 | grep 'error TS' | wc -l | tr -d ' '"
-max_count = 50.0
 ```
 
-**Score** = `100 × (1 - count / max_count)`
+**Penalty** = raw output value
 
 ---
 
 ### `percentage`
 
-Expects a command that outputs a percentage value (with or without `%`).
+Expects a command that outputs a percentage value (with or without `%`). The raw value is the **unattributed penalty**.
 
 ```toml
 [[metrics]]
 name = "accessibility"
 type = "percentage"
-weight = 10.0
 command = "scripts/axe-score.sh"
 ```
 
-**Score** = parsed percentage value (0–100, clamped)
+**Penalty** = parsed percentage value
 
 ---
 
 ### `score`
 
-Expects a command that outputs a raw score between 0 and 100.
+Expects a command that outputs a raw numeric value. The raw value is the **unattributed penalty**.
 
 ```toml
 [[metrics]]
 name = "custom_score"
 type = "score"
-weight = 10.0
 command = "scripts/my-score.sh"
 ```
 
-**Score** = parsed float value (clamped to 0–100)
+**Penalty** = parsed float value
 
 ---
 
@@ -172,9 +158,9 @@ Parses JavaScript and TypeScript files in-process with [oxc-parser](https://oxc.
 **Common fields:**
 
 - `files` — one or more glob patterns for source files to parse, resolved relative to `fiber.toml`
-- `error_penalty` — score deduction per match (default: `1.0`)
+- `error_penalty` — penalty per match (default: `1.0`)
 
-**Score** = `max(0, 100 - match_count × error_penalty)`
+**Penalty per file** = `match_count × error_penalty`
 
 #### `ast_count_node` — count AST nodes by type
 
@@ -187,7 +173,6 @@ type = "ast"
 files = ["src/**/*.ts", "src/**/*.tsx"]
 ast_count_node = "TSAnyKeyword"
 error_penalty = 5.0
-weight = 15.0
 ```
 
 #### `comment_startswith` — count comments by prefix
@@ -201,7 +186,6 @@ type = "ast"
 files = ["src/**/*.ts", "src/**/*.tsx"]
 comment_startswith = ["eslint-disable"]
 error_penalty = 2.0
-weight = 10.0
 ```
 
 #### `comment_contains` — count comments by substring
@@ -215,7 +199,6 @@ type = "ast"
 files = ["src/**/*.ts"]
 comment_contains = ["TODO", "FIXME", "HACK"]
 error_penalty = 1.0
-weight = 5.0
 ```
 
 ---
@@ -231,13 +214,15 @@ fiber score
 Reads `fiber.toml`, runs all metrics, and prints coloured output:
 
 ```
-Overall Score: 87.3/100
+Total Penalty: 3.5  (0 = perfect)
 --------------------------------------------------
-  eslint               95.0 / 100  (weight: 30)  0 errors, 2 warnings
-  test_coverage        84.2 / 100  (weight: 30)  84.2% line coverage
-  typescript_errors   100.0 / 100  (weight: 20)  0 issues (max 50)
-  custom_score         75.0 / 100  (weight: 10)  score: 75.0
+  eslint               penalty:   2.5  2 errors, 1 warning
+  test_coverage        penalty:   1.0  1.0% uncovered lines
+  typescript_errors    penalty:   0.0  0 issues
+  custom_score         penalty:   0.0  score: 0.0
 ```
+
+Color coding: green if overall penalty is `0`, yellow if `≤10.0`, red otherwise.
 
 ---
 
@@ -292,11 +277,10 @@ fiber history --from 2024-01-01 --to 2024-03-31 --output q1.html
 
 When `--output` is provided to `range` or `history`, Fiber generates an HTML report with:
 
-- An interactive **Chart.js** line chart showing overall score and each metric over time
-- A **data table** with per-commit scores and metric details
-- Colour coding: 🟢 ≥80, 🟡 ≥60, 🔴 <60
+- An interactive **Chart.js stacked bar chart** showing penalty by metric over commits (x-axis = commits, y-axis = total penalty). Lower bars are better; a bar of height 0 means a perfect score.
+- A **data table** with per-commit penalty totals and metric details.
 
-## Note: if the generated report loads **Chart.js** from a CDN, viewing the chart requires network access unless Chart.js is bundled separately.
+> **Note:** The report loads Chart.js from a CDN. Viewing the chart requires network access.
 
 ## Custom Metrics Guide
 
@@ -307,22 +291,18 @@ Any shell command that outputs a compatible value can be used as a metric.
 [[metrics]]
 name = "todos"
 type = "count"
-weight = 5.0
 command = "grep -r 'TODO' src/ | wc -l | tr -d ' '"
-max_count = 50.0
 
-# Bundle size score (your script maps size to 0-100)
+# Bundle size (penalty = raw value your script returns)
 [[metrics]]
 name = "bundle_size"
 type = "score"
-weight = 15.0
 command = "scripts/bundle-score.sh"
 
-# Dependency health percentage
+# Dependency health (penalty = percentage value your script returns)
 [[metrics]]
 name = "dep_health"
 type = "percentage"
-weight = 10.0
 command = "scripts/dep-audit.sh"
 ```
 

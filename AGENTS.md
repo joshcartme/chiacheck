@@ -15,7 +15,7 @@
     - `config.rs`: Config schema and TOML loading. `DEFAULT_CONFIG` is `fiber.toml`.
     - `git.rs`: Git command wrappers plus commit-range/date-range traversal helpers.
     - `metrics/runner.rs`: Metric execution and parsing.
-    - `scorer.rs`: Weighted score aggregation and the `HealthScore` type.
+    - `scorer.rs`: Penalty accumulation scoring and the `HealthScore` type.
     - `report.rs`: HTML report generation and escaping rules.
 - **Feature placement**: If a change affects parsing rules, scoring semantics, or report generation, update the domain module first and keep `main.rs` thin.
 
@@ -25,7 +25,7 @@
 - **`MetricResult`** (`metrics/mod.rs`): `Clone + Serialize`. Fields: `name`, `total_penalty`, `attributed: Vec<(String, f64)>`, `unattributed: f64`, `details`. `attributed` holds `(file_path, penalty)` pairs for per-file results; `unattributed` holds the remainder.
 - **`PenaltyNode`** (`scorer.rs`): `Debug + Serialize`. Fields: `path`, `penalties: HashMap<String, f64>`, `children: Vec<PenaltyNode>`. Leaf nodes are files; directory nodes aggregate child penalties per metric key. `total_penalty()` sums all values in `penalties`.
 - **`HealthScore`** (`scorer.rs`): `Debug + Serialize`. Fields: `overall`, `unattributed: HashMap<String, f64>`, `tree: PenaltyNode`, `metrics`, `commit`, `timestamp`. Built by `build_health_score()`.
-- **`FiberError`** (`error.rs`): Domain error enum with `Config`, `Metric`, `Git`, `Report`, and `Io` variants.
+- **`CommitInfo`** (`git.rs`): Fields: `sha: String`, `timestamp_unix: i64`. Returned by `get_commits_in_range` and `get_commits_in_date_range`; carries everything needed to check out a commit and record its timestamp without extra `git show` calls.
 
 ## Error Handling
 
@@ -47,6 +47,7 @@
 - **`score` contract**: Expect a raw numeric score on stdout. The raw value is the unattributed penalty.
 - **`ast` contract**: No command required. Parses JS/TS files matched by `files` globs using oxc. Counts nodes matching `ast_count_node` and comment text matching `comment_startswith`/`comment_contains`. Each hit is one unit of penalty attributed to its source file. Penalties are multiplied by `error_penalty` (default 1.0) if set.
 - **`make_relative` helper**: Used by `lint` and `coverage` runners to normalize absolute paths from tool JSON output to paths relative to the config directory. Falls back to the original string if strip_prefix fails.
+- **`run_all_metrics`**: Runs all configured metrics in parallel on the rayon thread pool. Pre-reads all source files needed by AST metrics into a shared `source_cache` so files are not re-read per metric. Prefer this over calling `run_metric` in a loop.
 
 ## Scoring Rules
 
