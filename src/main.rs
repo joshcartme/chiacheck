@@ -4,13 +4,13 @@ use clap::Parser;
 use fiber::cli::{Cli, Commands};
 use fiber::config::load_config;
 use fiber::metrics::runner::run_metric;
-use fiber::scorer::{calculate_score, HealthScore};
+use fiber::scorer::{build_health_score, HealthScore};
 use fiber::{git, report};
 
 fn print_score(score: &HealthScore) {
-    let color = if score.overall >= 80.0 {
+    let color = if score.overall == 0.0 {
         "\x1b[32m"
-    } else if score.overall >= 60.0 {
+    } else if score.overall <= 10.0 {
         "\x1b[33m"
     } else {
         "\x1b[31m"
@@ -20,19 +20,19 @@ fn print_score(score: &HealthScore) {
     if let Some(ref commit) = score.commit {
         println!("Commit: {}", &commit[..commit.len().min(12)]);
     }
-    println!("Overall Score: {}{:.1}{}/100", color, score.overall, reset);
+    println!("Total Penalty: {}{:.1}{}  (0 = perfect)", color, score.overall, reset);
     println!("{:-<50}", "");
     for m in &score.metrics {
-        let mc = if m.score >= 80.0 {
+        let mc = if m.total_penalty == 0.0 {
             "\x1b[32m"
-        } else if m.score >= 60.0 {
+        } else if m.total_penalty <= 5.0 {
             "\x1b[33m"
         } else {
             "\x1b[31m"
         };
         println!(
-            "  {:20} {:}{:5.1}{} / 100  (weight: {:.0})  {}",
-            m.name, mc, m.score, reset, m.weight, m.details
+            "  {:20} {}penalty: {:5.1}{}  {}",
+            m.name, mc, m.total_penalty, reset, m.details
         );
     }
     println!();
@@ -69,16 +69,11 @@ fn score_commits(commits: &[String], config_path: &str) -> Result<Vec<HealthScor
             .iter()
             .map(|m| run_metric(m, config_dir))
             .collect();
-        let overall = calculate_score(&results);
         let date = git::get_commit_date(sha).unwrap_or_default();
-        scores.push(HealthScore {
-            overall,
-            metrics: results,
-            commit: Some(sha.clone()),
-            timestamp: chrono::DateTime::parse_from_str(&date, "%Y-%m-%d %H:%M:%S %z")
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-        });
+        let timestamp = chrono::DateTime::parse_from_str(&date, "%Y-%m-%d %H:%M:%S %z")
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        scores.push(build_health_score(results, Some(sha.clone()), timestamp));
     }
 
     // Always restore original HEAD, whether on a branch or detached.
@@ -115,13 +110,11 @@ fn run_score_command(config_path: &str) -> Result<HealthScore> {
         .iter()
         .map(|m| run_metric(m, config_dir))
         .collect();
-    let overall = calculate_score(&results);
-    Ok(HealthScore {
-        overall,
-        metrics: results,
-        commit: git::get_current_commit().ok(),
-        timestamp: Utc::now(),
-    })
+    Ok(build_health_score(
+        results,
+        git::get_current_commit().ok(),
+        Utc::now(),
+    ))
 }
 
 fn run_range_command(from: &str, to: &str, output: Option<&str>, config_path: &str) -> Result<()> {

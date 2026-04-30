@@ -5,7 +5,8 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 pub struct MetricResult {
     pub name: String,
-    pub score: f64,
-    pub weight: f64,
+    pub total_penalty: f64,
+    pub attributed: Vec<(String, f64)>,
+    pub unattributed: f64,
     pub details: String,
 }

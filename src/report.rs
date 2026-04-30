@@ -10,16 +10,6 @@ pub fn generate_html_report(scores: &[HealthScore], output_path: &str) -> Result
     Ok(())
 }
 
-fn score_color(score: f64) -> &'static str {
-    if score >= 80.0 {
-        "#22c55e"
-    } else if score >= 60.0 {
-        "#eab308"
-    } else {
-        "#ef4444"
-    }
-}
-
 fn json_for_html_script<T: serde::Serialize>(value: &T) -> Result<String> {
     // Prevent `</script>` from terminating script tags early in HTML.
     Ok(serde_json::to_string(value)?.replace("</", "<\\/"))
@@ -62,17 +52,11 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
 
     let labels_json = json_for_html_script(&labels)?;
 
-    // Overall scores dataset
-    let overall_data: Vec<f64> = scores
-        .iter()
-        .map(|hs| (hs.overall * 10.0).round() / 10.0)
-        .collect();
-    // Metric colors
+    // Stacked bar chart: one dataset per metric, value = total_penalty for that commit.
     let colors = [
         "#3b82f6", "#f97316", "#a855f7", "#14b8a6", "#f43f5e", "#84cc16", "#06b6d4", "#8b5cf6",
     ];
 
-    // Build metric datasets safely via JSON serialization
     let mut metric_datasets = Vec::new();
     for (i, name) in metric_names.iter().enumerate() {
         let color = colors[i % colors.len()];
@@ -80,34 +64,19 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
             .iter()
             .map(|map| {
                 map.get(name.as_str())
-                    .map(|m| (m.score * 10.0).round() / 10.0)
+                    .map(|m| (m.total_penalty * 10.0).round() / 10.0)
                     .unwrap_or(0.0)
             })
             .collect();
         metric_datasets.push(serde_json::json!({
             "label": name,
             "data": data,
+            "backgroundColor": color,
             "borderColor": color,
-            "backgroundColor": format!("{color}22"),
-            "borderWidth": 2,
-            "tension": 0.3,
-            "pointRadius": 4
+            "borderWidth": 1
         }));
     }
-    let datasets = {
-        let mut datasets = vec![serde_json::json!({
-            "label": "Overall",
-            "data": overall_data,
-            "borderColor": "#38bdf8",
-            "backgroundColor": "#38bdf822",
-            "borderWidth": 3,
-            "tension": 0.3,
-            "pointRadius": 5
-        })];
-        datasets.extend(metric_datasets);
-        datasets
-    };
-    let datasets_json = json_for_html_script(&datasets)?;
+    let datasets_json = json_for_html_script(&metric_datasets)?;
 
     // Build table rows
     let mut table_rows = String::new();
@@ -118,21 +87,16 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
             .map(|c| if c.len() > 12 { &c[..12] } else { c })
             .unwrap_or("-");
         let date_label = hs.timestamp.format("%Y-%m-%d %H:%M").to_string();
-        let overall_color = score_color(hs.overall);
         let metric_cells: String = metric_names
             .iter()
             .map(|name| {
                 let m = score_map.get(name.as_str()).copied();
                 match m {
-                    Some(m) => {
-                        let c = score_color(m.score);
-                        format!(
-                            r#"<td style="color:{}">{:.1}<br><small style="color:#888">{}</small></td>"#,
-                            c,
-                            m.score,
-                            htmlize::escape_text(&m.details)
-                        )
-                    }
+                    Some(m) => format!(
+                        r#"<td>{:.1}<br><small style="color:#888">{}</small></td>"#,
+                        m.total_penalty,
+                        htmlize::escape_text(&m.details)
+                    ),
                     None => "<td>-</td>".to_string(),
                 }
             })
@@ -141,12 +105,11 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
             r#"<tr>
                 <td>{}</td>
                 <td>{}</td>
-                <td style="color:{};font-weight:bold">{:.1}</td>
+                <td style="font-weight:bold">{:.1}</td>
                 {}
             </tr>"#,
             htmlize::escape_text(commit_label),
             htmlize::escape_text(&date_label),
-            overall_color,
             hs.overall,
             metric_cells
         ));
@@ -163,7 +126,7 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fiber Health Score Report</title>
+<title>Fiber Penalty Report</title>
 <!-- Pin to a specific version; verify SRI hash before deploying to production -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.min.js" integrity="sha512-n/G+dROKbKL3GVngGWmWfwK0yPctjZQM752diVYnXZtD/48agpUKLIn0xDQL9ydZ91x6BiOmTIFwWjjFi2kEFg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
@@ -179,13 +142,13 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
 </style>
 </head>
 <body>
-<h1>🧵 Fiber Health Score Report</h1>
-<p class="subtitle">Generated {}</p>
+<h1>🧵 Fiber Penalty Report</h1>
+<p class="subtitle">Generated {} &mdash; lower is better, 0 = perfect</p>
 <div class="chart-container">
   <canvas id="chart"></canvas>
 </div>
 <table>
-  <thead><tr><th>Commit</th><th>Date</th><th>Overall</th>{}</tr></thead>
+  <thead><tr><th>Commit</th><th>Date</th><th>Total Penalty</th>{}</tr></thead>
   <tbody>{}</tbody>
 </table>
 <script id="chart-labels" type="application/json">{}</script>
@@ -195,7 +158,7 @@ const labels = JSON.parse(document.getElementById('chart-labels').textContent);
 const datasets = JSON.parse(document.getElementById('chart-datasets').textContent);
 const ctx = document.getElementById('chart').getContext('2d');
 new Chart(ctx, {{
-  type: 'line',
+  type: 'bar',
   data: {{
     labels,
     datasets
@@ -207,12 +170,8 @@ new Chart(ctx, {{
       tooltip: {{ mode: 'index', intersect: false }}
     }},
     scales: {{
-      x: {{ ticks: {{ color: '#94a3b8' }}, grid: {{ color: '#334155' }} }},
-      y: {{
-        min: 0, max: 100,
-        ticks: {{ color: '#94a3b8' }},
-        grid: {{ color: '#334155' }}
-      }}
+      x: {{ stacked: true, ticks: {{ color: '#94a3b8' }}, grid: {{ color: '#334155' }} }},
+      y: {{ stacked: true, ticks: {{ color: '#94a3b8' }}, grid: {{ color: '#334155' }} }}
     }}
   }}
 }});
@@ -226,3 +185,4 @@ new Chart(ctx, {{
         datasets_json,
     ))
 }
+

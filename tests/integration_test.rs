@@ -1,6 +1,7 @@
 use fiber::config::load_config;
 use fiber::metrics::runner::run_metric;
-use fiber::scorer::calculate_score;
+use fiber::scorer::build_health_score;
+use chrono::Utc;
 use std::path::Path;
 
 #[test]
@@ -9,28 +10,75 @@ fn test_config_parsing() {
     assert_eq!(config.metrics.len(), 2);
     assert_eq!(config.metrics[0].name, "lint");
     assert_eq!(config.metrics[0].metric_type, "count");
-    assert_eq!(config.metrics[0].weight, 50.0);
     assert_eq!(config.metrics[1].name, "coverage");
 }
 
 #[test]
-fn test_score_calculation() {
+fn test_config_duplicate_names_rejected() {
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+    let mut f = NamedTempFile::new().unwrap();
+    write!(
+        f,
+        "[[metrics]]\nname = \"dup\"\ntype = \"count\"\ncommand = \"echo 1\"\n\n\
+         [[metrics]]\nname = \"dup\"\ntype = \"count\"\ncommand = \"echo 2\"\n"
+    )
+    .unwrap();
+    let result = load_config(f.path().to_str().unwrap());
+    assert!(result.is_err(), "duplicate names should be rejected");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("dup"), "error should name the duplicate: {}", msg);
+}
+
+#[test]
+fn test_build_health_score_unattributed() {
     let metrics = vec![
         fiber::metrics::MetricResult {
             name: "a".to_string(),
-            score: 100.0,
-            weight: 50.0,
-            details: "ok".to_string(),
+            total_penalty: 5.0,
+            attributed: vec![],
+            unattributed: 5.0,
+            details: "5 issues".to_string(),
         },
         fiber::metrics::MetricResult {
             name: "b".to_string(),
-            score: 60.0,
-            weight: 50.0,
-            details: "ok".to_string(),
+            total_penalty: 3.0,
+            attributed: vec![],
+            unattributed: 3.0,
+            details: "3 issues".to_string(),
         },
     ];
-    let score = calculate_score(&metrics);
-    assert!((score - 80.0).abs() < 0.01);
+    let hs = build_health_score(metrics, None, Utc::now());
+    assert!((hs.overall - 8.0).abs() < 0.01, "overall should be 8.0, got {}", hs.overall);
+    assert!((hs.unattributed["a"] - 5.0).abs() < 0.01);
+    assert!((hs.unattributed["b"] - 3.0).abs() < 0.01);
+    assert!(hs.tree.children.is_empty());
+}
+
+#[test]
+fn test_build_health_score_attributed_tree() {
+    let metrics = vec![
+        fiber::metrics::MetricResult {
+            name: "lint".to_string(),
+            total_penalty: 7.0,
+            attributed: vec![
+                ("src/a.ts".to_string(), 4.0),
+                ("src/b.ts".to_string(), 3.0),
+            ],
+            unattributed: 0.0,
+            details: "7 penalty".to_string(),
+        },
+    ];
+    let hs = build_health_score(metrics, None, Utc::now());
+    assert!((hs.overall - 7.0).abs() < 0.01, "overall {}", hs.overall);
+    // Tree root should have one "src" directory child
+    assert_eq!(hs.tree.children.len(), 1);
+    let src_node = &hs.tree.children[0];
+    assert_eq!(src_node.path, "src");
+    assert!((src_node.total_penalty() - 7.0).abs() < 0.01);
+    assert!((src_node.penalties["lint"] - 7.0).abs() < 0.01);
+    // src should have two file children
+    assert_eq!(src_node.children.len(), 2);
 }
 
 #[test]
@@ -39,12 +87,9 @@ fn test_count_metric() {
     let config = MetricConfig {
         name: "test".to_string(),
         metric_type: "count".to_string(),
-        weight: 10.0,
-        command: "echo 10".to_string(),
+        command: Some("echo 10".to_string()),
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: None,
-        max_count: Some(100.0),
         files: None,
         ast_count_node: None,
         comment_startswith: None,
@@ -52,25 +97,23 @@ fn test_count_metric() {
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
-        (result.score - 90.0).abs() < 0.01,
-        "Expected 90, got {}",
-        result.score
+        (result.total_penalty - 10.0).abs() < 0.01,
+        "Expected 10.0 penalty, got {}",
+        result.total_penalty
     );
+    assert!((result.unattributed - 10.0).abs() < 0.01);
+    assert!(result.attributed.is_empty());
 }
 
 #[test]
-fn test_lint_metric() {
+fn test_lint_metric_empty_json() {
     use fiber::config::MetricConfig;
-    // ESLint-style JSON array: empty → no errors or warnings
     let config = MetricConfig {
         name: "lint".to_string(),
         metric_type: "lint".to_string(),
-        weight: 10.0,
-        command: "echo '[]'".to_string(),
+        command: Some("echo '[]'".to_string()),
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: None,
         ast_count_node: None,
         comment_startswith: None,
@@ -78,15 +121,53 @@ fn test_lint_metric() {
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
-        (result.score - 100.0).abs() < 0.01,
-        "Expected 100 for empty lint JSON, got {}",
-        result.score
+        (result.total_penalty - 0.0).abs() < 0.01,
+        "Expected 0 penalty for empty lint JSON, got {}",
+        result.total_penalty
     );
+    assert!(result.details.contains("0 errors"));
+}
+
+#[test]
+fn test_lint_metric_per_file_attribution() {
+    use fiber::config::MetricConfig;
+    use serde_json::json;
+    use tempfile::tempdir;
+    // ESLint JSON with two files: one error in foo.ts, one warning in bar.ts
+    let dir = tempdir().unwrap();
+    let json = json!([
+        {
+            "filePath": format!("{}/src/foo.ts", dir.path().display()),
+            "errorCount": 1,
+            "warningCount": 0
+        },
+        {
+            "filePath": format!("{}/src/bar.ts", dir.path().display()),
+            "errorCount": 0,
+            "warningCount": 2
+        }
+    ])
+    .to_string();
+    let config = MetricConfig {
+        name: "eslint".to_string(),
+        metric_type: "lint".to_string(),
+        command: Some(format!("echo '{}'", json)),
+        error_penalty: Some(2.0),
+        warning_penalty: Some(1.0),
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
+    };
+    let result = run_metric(&config, dir.path());
+    // foo.ts: 1 error × 2.0 = 2.0; bar.ts: 2 warnings × 1.0 = 2.0; total = 4.0
     assert!(
-        result.details.contains("0 errors"),
-        "details: {}",
-        result.details
+        (result.total_penalty - 4.0).abs() < 0.01,
+        "Expected 4.0, got {}",
+        result.total_penalty
     );
+    assert_eq!(result.attributed.len(), 2, "should have 2 attributed files");
+    assert!((result.unattributed - 0.0).abs() < 0.01);
 }
 
 #[test]
@@ -95,12 +176,9 @@ fn test_score_metric() {
     let config = MetricConfig {
         name: "sc".to_string(),
         metric_type: "score".to_string(),
-        weight: 10.0,
-        command: "echo 85".to_string(),
+        command: Some("echo 85".to_string()),
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: None,
         ast_count_node: None,
         comment_startswith: None,
@@ -108,10 +186,11 @@ fn test_score_metric() {
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
-        (result.score - 85.0).abs() < 0.01,
-        "Expected 85, got {}",
-        result.score
+        (result.total_penalty - 85.0).abs() < 0.01,
+        "Expected 85.0 penalty, got {}",
+        result.total_penalty
     );
+    assert!((result.unattributed - 85.0).abs() < 0.01);
 }
 
 #[test]
@@ -120,12 +199,9 @@ fn test_percentage_metric() {
     let config = MetricConfig {
         name: "pct".to_string(),
         metric_type: "percentage".to_string(),
-        weight: 10.0,
-        command: "echo 72.5".to_string(),
+        command: Some("echo 72.5".to_string()),
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: None,
         ast_count_node: None,
         comment_startswith: None,
@@ -133,27 +209,24 @@ fn test_percentage_metric() {
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
-        (result.score - 72.5).abs() < 0.01,
-        "Expected 72.5, got {}",
-        result.score
+        (result.total_penalty - 72.5).abs() < 0.01,
+        "Expected 72.5 penalty, got {}",
+        result.total_penalty
     );
 }
 
-// --- coverage scoring edge cases -------------------------------------------------
+// --- coverage metric -----------------------------------------------------------
 
 #[test]
-fn test_coverage_above_threshold() {
+fn test_coverage_raw_numeric_unattributed() {
     use fiber::config::MetricConfig;
-    // 90% coverage, threshold 80 → score == 90 (pass-through)
+    // Raw numeric: 80% coverage → penalty = 100 - 80 = 20.0 (unattributed)
     let config = MetricConfig {
         name: "cov".to_string(),
         metric_type: "coverage".to_string(),
-        weight: 10.0,
-        command: "echo 90".to_string(),
+        command: Some("echo 80".to_string()),
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: Some(80.0),
-        max_count: None,
         files: None,
         ast_count_node: None,
         comment_startswith: None,
@@ -161,86 +234,66 @@ fn test_coverage_above_threshold() {
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
-        (result.score - 90.0).abs() < 0.01,
-        "Expected 90.0, got {}",
-        result.score
+        (result.total_penalty - 20.0).abs() < 0.01,
+        "Expected 20.0 penalty, got {}",
+        result.total_penalty
     );
+    assert!((result.unattributed - 20.0).abs() < 0.01);
+    assert!(result.attributed.is_empty());
 }
 
 #[test]
-fn test_coverage_below_threshold_linear() {
+fn test_coverage_istanbul_per_file_attribution() {
     use fiber::config::MetricConfig;
-    // 50% coverage, threshold 80 → proportional score = 50/80 * 100 = 62.5
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    // Istanbul/c8 JSON: two files, one at 100% (0 penalty), one at 60% (40 penalty)
+    let json = format!(
+        r#"{{"total":{{"lines":{{"pct":80.0}}}},"{}/src/full.ts":{{"lines":{{"pct":100.0}}}},"{}/src/partial.ts":{{"lines":{{"pct":60.0}}}}}}"#,
+        dir.path().display(),
+        dir.path().display()
+    );
     let config = MetricConfig {
-        name: "cov".to_string(),
+        name: "coverage".to_string(),
         metric_type: "coverage".to_string(),
-        weight: 10.0,
-        command: "echo 50".to_string(),
+        command: Some(format!("printf '%s' '{}'", json)),
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: Some(80.0),
-        max_count: None,
         files: None,
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
     };
-    let result = run_metric(&config, Path::new("."));
+    let result = run_metric(&config, dir.path());
+    // full.ts: 100 - 100 = 0.0; partial.ts: 100 - 60 = 40.0
     assert!(
-        (result.score - 62.5).abs() < 0.01,
-        "Expected 62.5 (proportional), got {}",
-        result.score
+        (result.total_penalty - 40.0).abs() < 0.01,
+        "Expected 40.0, got {}",
+        result.total_penalty
     );
+    assert!((result.unattributed - 0.0).abs() < 0.01);
+    // Only partial.ts has non-zero penalty so only 1 attributed entry
+    assert_eq!(result.attributed.len(), 1, "should have 1 attributed file (full.ts has 0 penalty)");
 }
 
-#[test]
-fn test_coverage_no_threshold() {
-    use fiber::config::MetricConfig;
-    // No threshold → score == pct directly
-    let config = MetricConfig {
-        name: "cov".to_string(),
-        metric_type: "coverage".to_string(),
-        weight: 10.0,
-        command: "echo 65".to_string(),
-        error_penalty: None,
-        warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
-        files: None,
-        ast_count_node: None,
-        comment_startswith: None,
-        comment_contains: None,
-    };
-    let result = run_metric(&config, Path::new("."));
-    assert!(
-        (result.score - 65.0).abs() < 0.01,
-        "Expected 65.0, got {}",
-        result.score
-    );
-}
-
-// --- run_command exit-code behaviour ---------------------------------------------
+// --- run_command exit-code behaviour ------------------------------------------
 
 #[test]
 fn test_failing_command_surfaces_error() {
     use fiber::config::MetricConfig;
-    // A command that exits non-zero should produce a score of 0 with an error detail.
     let config = MetricConfig {
         name: "bad".to_string(),
         metric_type: "score".to_string(),
-        weight: 10.0,
-        command: "exit 1".to_string(),
+        command: Some("exit 1".to_string()),
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: None,
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
     };
     let result = run_metric(&config, Path::new("."));
-    assert_eq!(result.score, 0.0, "failing command should yield score 0");
+    assert_eq!(result.total_penalty, 0.0, "failing command should yield 0 penalty");
     assert!(
         result.details.starts_with("Error:"),
         "details should contain error, got: {}",
@@ -248,11 +301,10 @@ fn test_failing_command_surfaces_error() {
     );
 }
 
-// --- git helper: parse_commit_lines (via public API) ----------------------------
+// --- git helper: parse_commit_lines (via public API) --------------------------
 
 #[test]
 fn test_get_commits_in_range_no_duplicate() {
-    // An empty range (A..A) should return no commits.
     let result = fiber::git::get_commits_in_range("HEAD", "HEAD");
     match result {
         Ok(commits) => assert!(
@@ -260,20 +312,16 @@ fn test_get_commits_in_range_no_duplicate() {
             "A..A should yield no commits, got: {:?}",
             commits
         ),
-        Err(_) => {} // acceptable if git is unavailable in test env
+        Err(_) => {}
     }
 }
 
 #[test]
 fn test_get_commits_in_range_no_duplicate_nonempty() {
-    // For a non-empty range (HEAD~1..HEAD) the returned list should contain
-    // exactly the commits between those two points with no duplicates.
-    // We skip gracefully when the repo has fewer than 2 commits or git is absent.
     let commits = match fiber::git::get_commits_in_range("HEAD~1", "HEAD") {
         Ok(c) if !c.is_empty() => c,
-        _ => return, // skip
+        _ => return,
     };
-    // No SHA should appear more than once.
     let mut seen = std::collections::HashSet::new();
     for sha in &commits {
         assert!(
@@ -301,30 +349,24 @@ fn test_ast_count_node_ts_any() {
     let config = MetricConfig {
         name: "no_any".to_string(),
         metric_type: "ast".to_string(),
-        weight: 10.0,
-        command: String::new(),
+        command: None,
         error_penalty: Some(10.0),
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: Some(vec!["*.ts".to_string()]),
         ast_count_node: Some("TSAnyKeyword".to_string()),
         comment_startswith: None,
         comment_contains: None,
     };
     let result = run_metric(&config, dir.path());
-    // 2 TSAnyKeyword nodes × penalty 10 → score = 80
+    // 2 TSAnyKeyword nodes × penalty 10 = 20.0 total
     assert!(
-        (result.score - 80.0).abs() < 0.01,
-        "Expected 80.0, got {} (details: {})",
-        result.score,
+        (result.total_penalty - 20.0).abs() < 0.01,
+        "Expected 20.0, got {} (details: {})",
+        result.total_penalty,
         result.details
     );
-    assert!(
-        result.details.contains("2 matches"),
-        "details: {}",
-        result.details
-    );
+    assert_eq!(result.attributed.len(), 1, "should attribute to sample.ts");
+    assert!(result.details.contains("2 matches"));
 }
 
 #[test]
@@ -342,30 +384,23 @@ fn test_ast_comment_startswith() {
     let config = MetricConfig {
         name: "no_eslint_disable".to_string(),
         metric_type: "ast".to_string(),
-        weight: 10.0,
-        command: String::new(),
+        command: None,
         error_penalty: Some(1.0),
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: Some(vec!["*.ts".to_string()]),
         ast_count_node: None,
         comment_startswith: Some(vec!["eslint-disable".to_string()]),
         comment_contains: None,
     };
     let result = run_metric(&config, dir.path());
-    // 1 matching comment → score = 99
+    // 1 matching comment × 1.0 = 1.0
     assert!(
-        (result.score - 99.0).abs() < 0.01,
-        "Expected 99.0, got {} (details: {})",
-        result.score,
+        (result.total_penalty - 1.0).abs() < 0.01,
+        "Expected 1.0, got {} (details: {})",
+        result.total_penalty,
         result.details
     );
-    assert!(
-        result.details.contains("1 matches"),
-        "details: {}",
-        result.details
-    );
+    assert!(result.details.contains("1 matches"));
 }
 
 #[test]
@@ -383,30 +418,23 @@ fn test_ast_comment_contains() {
     let config = MetricConfig {
         name: "no_todos".to_string(),
         metric_type: "ast".to_string(),
-        weight: 10.0,
-        command: String::new(),
+        command: None,
         error_penalty: Some(1.0),
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: Some(vec!["*.ts".to_string()]),
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: Some(vec!["TODO".to_string(), "FIXME".to_string()]),
     };
     let result = run_metric(&config, dir.path());
-    // 2 matching comments → score = 98
+    // 2 matching comments × 1.0 = 2.0
     assert!(
-        (result.score - 98.0).abs() < 0.01,
-        "Expected 98.0, got {} (details: {})",
-        result.score,
+        (result.total_penalty - 2.0).abs() < 0.01,
+        "Expected 2.0, got {} (details: {})",
+        result.total_penalty,
         result.details
     );
-    assert!(
-        result.details.contains("2 matches"),
-        "details: {}",
-        result.details
-    );
+    assert!(result.details.contains("2 matches"));
 }
 
 #[test]
@@ -419,19 +447,16 @@ fn test_ast_no_files_match_is_error() {
     let config = MetricConfig {
         name: "no_any".to_string(),
         metric_type: "ast".to_string(),
-        weight: 10.0,
-        command: String::new(),
+        command: None,
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: Some(vec!["nonexistent/**/*.ts".to_string()]),
         ast_count_node: Some("TSAnyKeyword".to_string()),
         comment_startswith: None,
         comment_contains: None,
     };
     let result = run_metric(&config, dir.path());
-    assert_eq!(result.score, 0.0, "no files should yield score 0");
+    assert_eq!(result.total_penalty, 0.0, "no files should yield 0 penalty");
     assert!(
         result.details.starts_with("Error:"),
         "details should start with Error:, got: {}",
@@ -450,19 +475,16 @@ fn test_ast_missing_sub_feature_is_error() {
     let config = MetricConfig {
         name: "bad".to_string(),
         metric_type: "ast".to_string(),
-        weight: 10.0,
-        command: String::new(),
+        command: None,
         error_penalty: None,
         warning_penalty: None,
-        min_threshold: None,
-        max_count: None,
         files: Some(vec!["*.ts".to_string()]),
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
     };
     let result = run_metric(&config, dir.path());
-    assert_eq!(result.score, 0.0);
+    assert_eq!(result.total_penalty, 0.0);
     assert!(
         result.details.starts_with("Error:"),
         "details: {}",

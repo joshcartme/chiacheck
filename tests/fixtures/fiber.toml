@@ -1,12 +1,9 @@
 [[metrics]]
 name = "lint"
 type = "count"
-weight = 50.0
 command = "echo 5"
-max_count = 100.0
 
 [[metrics]]
 name = "coverage"
 type = "score"
-weight = 50.0
 command = "echo 75"

@@ -1,6 +1,7 @@
 use crate::error::FiberError;
 use anyhow::Result;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 
 pub const DEFAULT_CONFIG: &str = "fiber.toml";
@@ -10,12 +11,9 @@ pub struct MetricConfig {
     pub name: String,
     #[serde(rename = "type")]
     pub metric_type: String,
-    pub weight: f64,
-    pub command: String,
+    pub command: Option<String>,
     pub error_penalty: Option<f64>,
     pub warning_penalty: Option<f64>,
-    pub min_threshold: Option<f64>,
-    pub max_count: Option<f64>,
     pub files: Option<Vec<String>>,
     pub ast_count_node: Option<String>,
     pub comment_startswith: Option<Vec<String>>,
@@ -33,5 +31,22 @@ pub fn load_config(path: &str) -> Result<Config> {
         .map_err(|e| FiberError::Config(format!("Cannot read {}: {}", path, e)))?;
     let config: Config = toml::from_str(&content)
         .map_err(|e| FiberError::Config(format!("Invalid TOML in {}: {}", path, e)))?;
+
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut duplicates: Vec<&str> = Vec::new();
+    for m in &config.metrics {
+        if !seen.insert(m.name.as_str()) && !duplicates.contains(&m.name.as_str()) {
+            duplicates.push(m.name.as_str());
+        }
+    }
+    if !duplicates.is_empty() {
+        return Err(FiberError::Config(format!(
+            "Duplicate metric names in {}: {}",
+            path,
+            duplicates.join(", ")
+        ))
+        .into());
+    }
+
     Ok(config)
 }

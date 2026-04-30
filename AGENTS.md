@@ -21,9 +21,10 @@
 
 ## Key Types
 
-- **`MetricConfig`** (`config.rs`): Deserialized from TOML. Optional fields are `error_penalty`, `warning_penalty`, `min_threshold`, and `max_count`, with defaults applied in `metrics/runner.rs`.
-- **`MetricResult`** (`metrics/mod.rs`): `Clone + Serialize`. Fields: `name`, `score`, `weight`, `details`. Successful scores are always clamped to `[0.0, 100.0]`.
-- **`HealthScore`** (`scorer.rs`): `Serialize` only. Fields: `overall`, `metrics`, `commit`, `timestamp`.
+- **`MetricConfig`** (`config.rs`): Deserialized from TOML. `command` is `Option<String>` — required for all types except `ast`. Optional penalty-tuning fields: `error_penalty`, `warning_penalty`. AST-specific fields: `files`, `ast_count_node`, `comment_startswith`, `comment_contains`. Metric names must be unique across the config; `load_config` returns a `FiberError::Config` if duplicates are found.
+- **`MetricResult`** (`metrics/mod.rs`): `Clone + Serialize`. Fields: `name`, `total_penalty`, `attributed: Vec<(String, f64)>`, `unattributed: f64`, `details`. `attributed` holds `(file_path, penalty)` pairs for per-file results; `unattributed` holds the remainder.
+- **`PenaltyNode`** (`scorer.rs`): `Debug + Serialize`. Fields: `path`, `penalties: HashMap<String, f64>`, `children: Vec<PenaltyNode>`. Leaf nodes are files; directory nodes aggregate child penalties per metric key. `total_penalty()` sums all values in `penalties`.
+- **`HealthScore`** (`scorer.rs`): `Debug + Serialize`. Fields: `overall`, `unattributed: HashMap<String, f64>`, `tree: PenaltyNode`, `metrics`, `commit`, `timestamp`. Built by `build_health_score()`.
 - **`FiberError`** (`error.rs`): Domain error enum with `Config`, `Metric`, `Git`, `Report`, and `Io` variants.
 
 ## Error Handling
@@ -31,26 +32,29 @@
 - **Domain classification**: Use `FiberError` in library internals to preserve failure categories.
 - **Public return types**: Public module APIs currently return `anyhow::Result<T>` in several places while constructing `FiberError` values internally. Preserve that pattern unless you are intentionally refactoring the API boundary.
 - **Top-level boundary**: `src/main.rs` uses `anyhow::Result<()>` and should stay focused on orchestration and user-facing messages.
-- **`run_metric` is infallible**: It must keep returning `MetricResult`, never `Result`. Failures are represented as `score: 0.0` with `details` beginning with `Error:`.
+- **`run_metric` is infallible**: It must keep returning `MetricResult`, never `Result`. Failures are represented as `total_penalty: 0.0`, empty `attributed`, `unattributed: 0.0`, and `details` beginning with `Error:`.
 
 ## Metric Execution and Parsing
 
 - **Command runner**: Metric commands execute via `sh -c`.
 - **Parsing source**: Parse metric values from stdout. A non-zero exit status is treated as a command failure and ultimately becomes a zero-score `MetricResult`.
-- **Metric types are stringly-typed**: `metric_type` is matched as `&str` in `metrics/runner.rs`. The valid values are `lint`, `coverage`, `count`, `percentage`, and `score`.
+- **Metric types are stringly-typed**: `metric_type` is matched as `&str` in `metrics/runner.rs`. The valid values are `lint`, `coverage`, `count`, `percentage`, `score`, and `ast`.
 - **Adding a metric type**: Update the `match` in `metrics/runner.rs`, any config-facing docs in `README.md`, examples in `fiber.example.toml` when relevant, and integration tests.
-- **`lint` contract**: Prefer an ESLint-style JSON array with `errorCount` and `warningCount`. If JSON parsing fails, fall back to counting lines containing `error` or `warning` case-insensitively.
-- **`coverage` contract**: Accept either Istanbul/c8-style JSON at `total.lines.pct` or a raw numeric percentage on stdout.
-- **`count` contract**: Expect a finite numeric stdout value. `max_count` must be finite and greater than zero.
-- **`percentage` contract**: Accept numeric output with or without a trailing `%`.
-- **`score` contract**: Expect a raw numeric score. Clamp the parsed value into `[0.0, 100.0]`.
+- **`lint` contract**: Prefer an ESLint-style JSON array where each file entry has `filePath`, `errorCount`, and `warningCount`. Per-file penalties are attributed using `make_relative`. If JSON parsing fails, fall back to counting lines containing `error` or `warning` case-insensitively; those penalties are unattributed.
+- **`coverage` contract**: Prefer Istanbul/c8-style JSON: per-file entries at `[filePath].lines.pct` produce attributed `100 - pct` penalties (0-penalty files are omitted). Falls back to reading `total.lines.pct`, then to a raw numeric percentage on stdout — both produce an unattributed penalty.
+- **`count` contract**: Expect a finite numeric stdout value. The raw value is the unattributed penalty.
+- **`percentage` contract**: Accept numeric output with or without a trailing `%`. The raw value is the unattributed penalty.
+- **`score` contract**: Expect a raw numeric score on stdout. The raw value is the unattributed penalty.
+- **`ast` contract**: No command required. Parses JS/TS files matched by `files` globs using oxc. Counts nodes matching `ast_count_node` and comment text matching `comment_startswith`/`comment_contains`. Each hit is one unit of penalty attributed to its source file. Penalties are multiplied by `error_penalty` (default 1.0) if set.
+- **`make_relative` helper**: Used by `lint` and `coverage` runners to normalize absolute paths from tool JSON output to paths relative to the config directory. Falls back to the original string if strip_prefix fails.
 
 ## Scoring Rules
 
-- **Weighted average**: `calculate_score` computes a weight-normalized average. Weights do not need to sum to 100; only their relative ratios matter.
-- **Zero-weight behavior**: If the total weight is zero, the overall score is `0.0`.
-- **Clamping**: Successful metric scores are clamped to `[0.0, 100.0]` in `run_metric`.
-- **Coverage below threshold**: `coverage` scores below `min_threshold` are scaled proportionally as `pct / min_threshold * 100.0`.
+- **Penalty accumulation**: `build_health_score` replaces the old weighted-average model. Penalties are unbounded, non-negative, and lower is better. A score of `0.0` is perfect.
+- **`overall`**: The sum of all unattributed penalties plus `tree.total_penalty()`.
+- **Tree construction**: `build_health_score` flattens `MetricResult.attributed` entries into a `HashMap<file_path, HashMap<metric_name, penalty>>`, then builds a `PenaltyNode` tree by splitting paths on `/`. `aggregate_penalties` propagates child penalties upward so every directory node's `penalties` map reflects the sum of all descendants per metric key.
+- **Unattributed bucket**: Penalties that cannot be attributed to a specific file are stored in `HealthScore.unattributed` keyed by metric name.
+- **No clamping**: There is no upper bound on penalties. Do not clamp outputs in `run_metric`.
 
 ## Git Traversal Pattern
 
@@ -73,7 +77,7 @@ Additional git invariants:
 - Any JSON embedded inside `<script>` tags must go through `json_for_html_script()` so `</script>` is escaped safely.
 - Do not interpolate raw metric names, details, commit labels, or dates into HTML.
 - The report currently depends on a pinned Chart.js CDN asset with SRI. If you change that dependency, keep the pinning/integrity story explicit.
-- Preserve the report's current data model: a single overall dataset plus one dataset per metric name, with missing metric values rendered as `0.0` in the chart and `-` in the table.
+- The report uses a stacked bar chart (`type: 'bar'`, `stacked: true` on both axes). One dataset per metric name; the x-axis is commits and the y-axis is total penalty. Lower bars are better. Missing metric values are rendered as `0.0` in the chart and `-` in the table.
 
 ## Build, Tests, and Fixtures
 
