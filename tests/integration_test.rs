@@ -276,6 +276,34 @@ fn test_coverage_istanbul_per_file_attribution() {
     assert_eq!(result.attributed.len(), 1, "should have 1 attributed file (full.ts has 0 penalty)");
 }
 
+#[test]
+fn test_coverage_istanbul_total_only_unattributed() {
+    use fiber::config::MetricConfig;
+    // Istanbul JSON with only `total` (no per-file keys): use total.lines.pct
+    let json = r#"{"total":{"lines":{"pct":82.5}}}"#;
+    let config = MetricConfig {
+        name: "coverage".to_string(),
+        metric_type: "coverage".to_string(),
+        command: Some(format!("printf '%s' '{}'", json)),
+        error_penalty: None,
+        warning_penalty: None,
+        files: None,
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
+    };
+    let result = run_metric(&config, Path::new("."));
+    let expected_penalty = 100.0 - 82.5;
+    assert!(
+        (result.total_penalty - expected_penalty).abs() < 0.01,
+        "Expected {:.1} penalty, got {}",
+        expected_penalty,
+        result.total_penalty
+    );
+    assert!((result.unattributed - expected_penalty).abs() < 0.01);
+    assert!(result.attributed.is_empty());
+}
+
 // --- run_command exit-code behaviour ------------------------------------------
 
 #[test]

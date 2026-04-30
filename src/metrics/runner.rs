@@ -145,8 +145,9 @@ fn run_lint_tool(command: &str, config: &MetricConfig, config_dir: &Path) -> Run
 }
 
 /// Parses Istanbul/c8 coverage JSON. Per-file keys yield attributed penalties of
-/// `100 - lines.pct`. Falls back to a raw numeric percentage on stdout, which
-/// produces a single unattributed penalty of `100 - pct`.
+/// `100 - lines.pct`. If no per-file entries are present, reads `total.lines.pct`
+/// as an aggregated percentage (unattributed penalty `100 - pct`). Falls back to
+/// a raw numeric percentage on stdout for the same unattributed penalty.
 fn run_coverage(command: &str, config_dir: &Path) -> RunResult {
     let output = run_command(command)?;
     let trimmed = output.trim();
@@ -179,6 +180,15 @@ fn run_coverage(command: &str, config_dir: &Path) -> RunResult {
                     0.0,
                     format!("{:.1} total coverage penalty across files", total_penalty),
                 ));
+            }
+            if let Some(pct) = obj
+                .get("total")
+                .and_then(|t| t.get("lines"))
+                .and_then(|l| l.get("pct"))
+                .and_then(|p| p.as_f64())
+            {
+                let penalty = 100.0 - pct;
+                return Ok((Vec::new(), penalty, format!("{:.1}% coverage", pct)));
             }
         }
     }
