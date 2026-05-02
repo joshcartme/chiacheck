@@ -52,3 +52,17 @@ type = "ast"
 files = ["src/**/*.ts"]
 comment_contains = ["TODO", "FIXME", "HACK"]
 error_penalty = 1.0
+
+[[metrics]]
+name = "long_functions"
+type = "ast"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+max_function_lines = 40
+error_penalty = 1.0
+
+[[metrics]]
+name = "long_files"
+type = "ast"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+max_file_lines = 300
+error_penalty = 1.0

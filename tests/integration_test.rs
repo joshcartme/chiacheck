@@ -1,7 +1,7 @@
-use fiber::config::load_config;
-use fiber::metrics::runner::{run_metric, run_all_metrics};
-use fiber::scorer::build_health_score;
 use chrono::Utc;
+use fiber::config::load_config;
+use fiber::metrics::runner::{run_all_metrics, run_metric};
+use fiber::scorer::build_health_score;
 use std::path::Path;
 
 #[test]
@@ -15,8 +15,8 @@ fn test_config_parsing() {
 
 #[test]
 fn test_config_duplicate_names_rejected() {
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
     let mut f = NamedTempFile::new().unwrap();
     write!(
         f,
@@ -27,7 +27,11 @@ fn test_config_duplicate_names_rejected() {
     let result = load_config(f.path().to_str().unwrap());
     assert!(result.is_err(), "duplicate names should be rejected");
     let msg = format!("{}", result.unwrap_err());
-    assert!(msg.contains("dup"), "error should name the duplicate: {}", msg);
+    assert!(
+        msg.contains("dup"),
+        "error should name the duplicate: {}",
+        msg
+    );
 }
 
 #[test]
@@ -49,7 +53,11 @@ fn test_build_health_score_unattributed() {
         },
     ];
     let hs = build_health_score(metrics, None, Utc::now());
-    assert!((hs.overall - 8.0).abs() < 0.01, "overall should be 8.0, got {}", hs.overall);
+    assert!(
+        (hs.overall - 8.0).abs() < 0.01,
+        "overall should be 8.0, got {}",
+        hs.overall
+    );
     assert!((hs.unattributed["a"] - 5.0).abs() < 0.01);
     assert!((hs.unattributed["b"] - 3.0).abs() < 0.01);
     assert!(hs.tree.children.is_empty());
@@ -57,18 +65,13 @@ fn test_build_health_score_unattributed() {
 
 #[test]
 fn test_build_health_score_attributed_tree() {
-    let metrics = vec![
-        fiber::metrics::MetricResult {
-            name: "lint".to_string(),
-            total_penalty: 7.0,
-            attributed: vec![
-                ("src/a.ts".to_string(), 4.0),
-                ("src/b.ts".to_string(), 3.0),
-            ],
-            unattributed: 0.0,
-            details: "7 penalty".to_string(),
-        },
-    ];
+    let metrics = vec![fiber::metrics::MetricResult {
+        name: "lint".to_string(),
+        total_penalty: 7.0,
+        attributed: vec![("src/a.ts".to_string(), 4.0), ("src/b.ts".to_string(), 3.0)],
+        unattributed: 0.0,
+        details: "7 penalty".to_string(),
+    }];
     let hs = build_health_score(metrics, None, Utc::now());
     assert!((hs.overall - 7.0).abs() < 0.01, "overall {}", hs.overall);
     // Tree root should have one "src" directory child
@@ -94,6 +97,8 @@ fn test_count_metric() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
@@ -118,6 +123,8 @@ fn test_lint_metric_empty_json() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
@@ -158,6 +165,8 @@ fn test_lint_metric_per_file_attribution() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     // foo.ts: 1 error × 2.0 = 2.0; bar.ts: 2 warnings × 1.0 = 2.0; total = 4.0
@@ -183,6 +192,8 @@ fn test_score_metric() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
@@ -206,6 +217,8 @@ fn test_percentage_metric() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
@@ -231,6 +244,8 @@ fn test_coverage_raw_numeric_unattributed() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
@@ -263,6 +278,8 @@ fn test_coverage_istanbul_per_file_attribution() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     // full.ts: 100 - 100 = 0.0; partial.ts: 100 - 60 = 40.0
@@ -273,7 +290,11 @@ fn test_coverage_istanbul_per_file_attribution() {
     );
     assert!((result.unattributed - 0.0).abs() < 0.01);
     // Only partial.ts has non-zero penalty so only 1 attributed entry
-    assert_eq!(result.attributed.len(), 1, "should have 1 attributed file (full.ts has 0 penalty)");
+    assert_eq!(
+        result.attributed.len(),
+        1,
+        "should have 1 attributed file (full.ts has 0 penalty)"
+    );
 }
 
 #[test]
@@ -291,6 +312,8 @@ fn test_coverage_istanbul_total_only_unattributed() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, Path::new("."));
     let expected_penalty = 100.0 - 82.5;
@@ -319,9 +342,14 @@ fn test_failing_command_surfaces_error() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, Path::new("."));
-    assert_eq!(result.total_penalty, 0.0, "failing command should yield 0 penalty");
+    assert_eq!(
+        result.total_penalty, 0.0,
+        "failing command should yield 0 penalty"
+    );
     assert!(
         result.details.starts_with("Error:"),
         "details should contain error, got: {}",
@@ -384,6 +412,8 @@ fn test_ast_count_node_ts_any() {
         ast_count_node: Some("TSAnyKeyword".to_string()),
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     // 2 TSAnyKeyword nodes × penalty 10 = 20.0 total
@@ -419,6 +449,8 @@ fn test_ast_comment_startswith() {
         ast_count_node: None,
         comment_startswith: Some(vec!["eslint-disable".to_string()]),
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     // 1 matching comment × 1.0 = 1.0
@@ -453,6 +485,8 @@ fn test_ast_comment_contains() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: Some(vec!["TODO".to_string(), "FIXME".to_string()]),
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     // 2 matching comments × 1.0 = 2.0
@@ -463,6 +497,147 @@ fn test_ast_comment_contains() {
         result.details
     );
     assert!(result.details.contains("2 matches"));
+}
+
+#[test]
+fn test_ast_max_function_lines_counts_functions_and_methods() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("lengths.ts"),
+        "class Example {\n  method() {\n    const a = 1;\n    const b = 2;\n  }\n}\n\nconst obj = {\n  nested() {\n    const a = 1;\n    const b = 2;\n  },\n};\n\nfunction short() {\n  return 1;\n}\n\nconst arrow = () => {\n  const a = 1;\n  return a;\n};\n",
+    )
+    .unwrap();
+
+    let config = MetricConfig {
+        name: "long_functions".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: Some(3),
+        max_file_lines: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert!(
+        (result.total_penalty - 3.0).abs() < 0.01,
+        "Expected 3.0, got {} (details: {})",
+        result.total_penalty,
+        result.details
+    );
+    assert_eq!(result.attributed.len(), 1, "should attribute to lengths.ts");
+    assert!(result.details.contains("3 long functions/methods"));
+    assert!(result.details.contains("3 excess lines"));
+}
+
+#[test]
+fn test_ast_max_function_lines_counts_concise_arrow_functions() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("concise.ts"),
+        "const mapper = (value) =>\n  value\n    .trim()\n    .toUpperCase();\n",
+    )
+    .unwrap();
+
+    let config = MetricConfig {
+        name: "long_arrows".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: Some(2),
+        max_file_lines: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert!(
+        (result.total_penalty - 2.0).abs() < 0.01,
+        "Expected 2.0, got {} (details: {})",
+        result.total_penalty,
+        result.details
+    );
+    assert!(result.details.contains("1 long functions/methods"));
+    assert!(result.details.contains("2 excess lines"));
+}
+
+#[test]
+fn test_ast_max_file_lines_penalizes_excess_lines() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("short.ts"), "a\nb\nc\n").unwrap();
+    std::fs::write(dir.path().join("long.ts"), "a\nb\nc\nd\ne").unwrap();
+
+    let config = MetricConfig {
+        name: "long_files".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: None,
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: Some(3),
+    };
+    let result = run_metric(&config, dir.path());
+    assert!(
+        (result.total_penalty - 2.0).abs() < 0.01,
+        "Expected 2.0, got {} (details: {})",
+        result.total_penalty,
+        result.details
+    );
+    assert_eq!(
+        result.attributed.len(),
+        1,
+        "only long.ts should be attributed"
+    );
+    assert!(result.details.contains("1 long files"));
+    assert!(result.details.contains("2 excess lines"));
+}
+
+#[test]
+fn test_ast_multiple_sub_features_is_error() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("dup.ts"), "foo();\n").unwrap();
+
+    let config = MetricConfig {
+        name: "bad".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: None,
+        warning_penalty: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_node: Some("CallExpression".to_string()),
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: Some(10),
+        max_file_lines: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert_eq!(result.total_penalty, 0.0);
+    assert!(
+        result.details.starts_with("Error:"),
+        "details: {}",
+        result.details
+    );
 }
 
 #[test]
@@ -482,6 +657,8 @@ fn test_ast_no_files_match_is_error() {
         ast_count_node: Some("TSAnyKeyword".to_string()),
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     assert_eq!(result.total_penalty, 0.0, "no files should yield 0 penalty");
@@ -510,6 +687,8 @@ fn test_ast_missing_sub_feature_is_error() {
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     assert_eq!(result.total_penalty, 0.0);
@@ -530,15 +709,15 @@ fn test_lint_text_fallback() {
     let config = MetricConfig {
         name: "lint_text".to_string(),
         metric_type: "lint".to_string(),
-        command: Some(
-            "printf 'error: foo\\nwarning: bar\\nerror: baz\\n'".to_string(),
-        ),
+        command: Some("printf 'error: foo\\nwarning: bar\\nerror: baz\\n'".to_string()),
         error_penalty: None,
         warning_penalty: None,
         files: None,
         ast_count_node: None,
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, Path::new("."));
     assert!(
@@ -565,11 +744,7 @@ fn test_ast_count_node_call_expression() {
 
     let dir = tempdir().unwrap();
     // 3 CallExpression nodes
-    std::fs::write(
-        dir.path().join("calls.ts"),
-        "foo(); bar(); baz();\n",
-    )
-    .unwrap();
+    std::fs::write(dir.path().join("calls.ts"), "foo(); bar(); baz();\n").unwrap();
 
     let config = MetricConfig {
         name: "calls".to_string(),
@@ -581,6 +756,8 @@ fn test_ast_count_node_call_expression() {
         ast_count_node: Some("CallExpression".to_string()),
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     assert!(
@@ -612,6 +789,8 @@ fn test_ast_count_node_unknown_yields_zero() {
         ast_count_node: Some("ThisNodeDoesNotExistInOxc9999".to_string()),
         comment_startswith: None,
         comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
     };
     let result = run_metric(&config, dir.path());
     assert!(
@@ -659,7 +838,11 @@ fn test_html_script_escape() {
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
-    let output = dir.path().join("escaped.html").to_string_lossy().to_string();
+    let output = dir
+        .path()
+        .join("escaped.html")
+        .to_string_lossy()
+        .to_string();
 
     // SHA that contains "</script>" — must never appear raw in the JSON labels.
     let malicious_sha = "abc</script><script>alert(1)".to_string();
@@ -696,6 +879,8 @@ fn test_run_all_metrics_order_preserved() {
             ast_count_node: None,
             comment_startswith: None,
             comment_contains: None,
+            max_function_lines: None,
+            max_file_lines: None,
         },
         MetricConfig {
             name: "second".to_string(),
@@ -707,6 +892,8 @@ fn test_run_all_metrics_order_preserved() {
             ast_count_node: None,
             comment_startswith: None,
             comment_contains: None,
+            max_function_lines: None,
+            max_file_lines: None,
         },
         MetricConfig {
             name: "third".to_string(),
@@ -718,6 +905,8 @@ fn test_run_all_metrics_order_preserved() {
             ast_count_node: None,
             comment_startswith: None,
             comment_contains: None,
+            max_function_lines: None,
+            max_file_lines: None,
         },
     ];
 

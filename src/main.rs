@@ -49,10 +49,10 @@ fn score_commits(commits: &[CommitInfo], config_path: &str) -> Result<Vec<Health
     let mut scores: Vec<HealthScore> = Vec::new();
     let mut error_occurred = false;
 
-    // config_dir is pure path arithmetic — safe to compute once outside the loop.
-    let config_dir = std::path::Path::new(config_path)
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
+    // working_dir is the working directory where fiber was invoked, so that
+    // file globs in the config are resolved relative to the process working directory.
+    let working_dir_buf = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let working_dir = working_dir_buf.as_path();
 
     for info in commits {
         let sha = &info.sha;
@@ -71,7 +71,7 @@ fn score_commits(commits: &[CommitInfo], config_path: &str) -> Result<Vec<Health
                 continue;
             }
         };
-        let results = run_all_metrics(&config.metrics, config_dir);
+        let results = run_all_metrics(&config.metrics, working_dir);
         let timestamp =
             chrono::DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
         scores.push(build_health_score(results, Some(sha.clone()), timestamp));
@@ -103,10 +103,9 @@ fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> 
 
 fn run_score_command(config_path: &str) -> Result<HealthScore> {
     let config = load_config(config_path)?;
-    let config_dir = std::path::Path::new(config_path)
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
-    let results = run_all_metrics(&config.metrics, config_dir);
+    let working_dir_buf = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let working_dir = working_dir_buf.as_path();
+    let results = run_all_metrics(&config.metrics, working_dir);
     Ok(build_health_score(
         results,
         git::get_current_commit().ok(),

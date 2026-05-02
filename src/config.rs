@@ -18,6 +18,8 @@ pub struct MetricConfig {
     pub ast_count_node: Option<String>,
     pub comment_startswith: Option<Vec<String>>,
     pub comment_contains: Option<Vec<String>>,
+    pub max_function_lines: Option<usize>,
+    pub max_file_lines: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]

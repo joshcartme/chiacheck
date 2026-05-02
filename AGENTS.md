@@ -21,7 +21,7 @@
 
 ## Key Types
 
-- **`MetricConfig`** (`config.rs`): Deserialized from TOML. `command` is `Option<String>` — required for all types except `ast`. Optional penalty-tuning fields: `error_penalty`, `warning_penalty`. AST-specific fields: `files`, `ast_count_node`, `comment_startswith`, `comment_contains`. Metric names must be unique across the config; `load_config` returns a `FiberError::Config` if duplicates are found.
+- **`MetricConfig`** (`config.rs`): Deserialized from TOML. `command` is `Option<String>` — required for all types except `ast`. Optional penalty-tuning fields: `error_penalty`, `warning_penalty`. AST-specific fields: `files`, `ast_count_node`, `comment_startswith`, `comment_contains`, `max_function_lines`, `max_file_lines`. Metric names must be unique across the config; `load_config` returns a `FiberError::Config` if duplicates are found.
 - **`MetricResult`** (`metrics/mod.rs`): `Clone + Serialize`. Fields: `name`, `total_penalty`, `attributed: Vec<(String, f64)>`, `unattributed: f64`, `details`. `attributed` holds `(file_path, penalty)` pairs for per-file results; `unattributed` holds the remainder.
 - **`PenaltyNode`** (`scorer.rs`): `Debug + Serialize`. Fields: `path`, `penalties: HashMap<String, f64>`, `children: Vec<PenaltyNode>`. Leaf nodes are files; directory nodes aggregate child penalties per metric key. `total_penalty()` sums all values in `penalties`.
 - **`HealthScore`** (`scorer.rs`): `Debug + Serialize`. Fields: `overall`, `unattributed: HashMap<String, f64>`, `tree: PenaltyNode`, `metrics`, `commit`, `timestamp`. Built by `build_health_score()`.
@@ -45,8 +45,8 @@
 - **`count` contract**: Expect a finite numeric stdout value. The raw value is the unattributed penalty.
 - **`percentage` contract**: Accept numeric output with or without a trailing `%`. The raw value is the unattributed penalty.
 - **`score` contract**: Expect a raw numeric score on stdout. The raw value is the unattributed penalty.
-- **`ast` contract**: No command required. Parses JS/TS files matched by `files` globs using oxc. Counts nodes matching `ast_count_node` and comment text matching `comment_startswith`/`comment_contains`. Each hit is one unit of penalty attributed to its source file. Penalties are multiplied by `error_penalty` (default 1.0) if set.
-- **`make_relative` helper**: Used by `lint` and `coverage` runners to normalize absolute paths from tool JSON output to paths relative to the config directory. Falls back to the original string if strip_prefix fails.
+- **`ast` contract**: No command required. Exactly one of: `ast_count_node`, `comment_startswith`, `comment_contains`, `max_function_lines`, or `max_file_lines`. Parses JS/TS with oxc for all modes except `max_file_lines` (raw line counts only). Counts AST nodes, comment matches, excess function span lines over `max_function_lines`, or excess file line count over `max_file_lines`. Penalties are attributed per file and multiplied by `error_penalty` (default 1.0) when set.
+- **`make_relative` helper**: Used by metric runners to normalize absolute paths to paths relative to the **working directory** (the `Path` passed into `run_metric` / `run_all_metrics`, which the CLI sets to `std::env::current_dir()`). Falls back to the original string if strip_prefix fails.
 - **`run_all_metrics`**: Runs all configured metrics in parallel on the rayon thread pool. Pre-reads all source files needed by AST metrics into a shared `source_cache` so files are not re-read per metric. Prefer this over calling `run_metric` in a loop.
 
 ## Scoring Rules

@@ -34,7 +34,7 @@ fiber score
 
 ## Configuration Reference
 
-Fiber reads `fiber.toml` from the current working directory. The file contains an array of `[[metrics]]` tables.
+Fiber reads `fiber.toml` from the current working directory by default (override with `--config`). The file contains an array of `[[metrics]]` tables. Glob patterns in metrics (for example `files` on `ast` metrics) and the working directory for spawned metric commands are both resolved **relative to the process current working directory** — not relative to the directory containing the config file. Run Fiber from your repository root (or `cd` there in scripts) so paths match your project layout.
 
 ### Common fields
 
@@ -43,7 +43,7 @@ Fiber reads `fiber.toml` from the current working directory. The file contains a
 | `name`    | string       | ✅                          | Unique display name for the metric                                |
 | `type`    | string       | ✅                          | Metric type (see below)                                           |
 | `command` | string       | ✅ (not required for `ast`) | Shell command to run                                              |
-| `files`   | string array | `ast` only                  | Glob patterns for JS/TS files to parse (relative to `fiber.toml`) |
+| `files`   | string array | `ast` only                  | Glob patterns for files to inspect (relative to the process working directory) |
 
 ### Type-specific fields
 
@@ -54,6 +54,8 @@ Fiber reads `fiber.toml` from the current working directory. The file contains a
 | `ast_count_node`     | string       | `ast`         | AST node type to count (e.g. `"TSAnyKeyword"`)          |
 | `comment_startswith` | string array | `ast`         | Count comments whose trimmed text starts with any entry |
 | `comment_contains`   | string array | `ast`         | Count comments whose text contains any entry            |
+| `max_function_lines` | integer      | `ast`         | Penalize functions or methods whose line span exceeds this limit |
+| `max_file_lines`     | integer      | `ast`         | Penalize files whose total physical line count exceeds this limit |
 
 ---
 
@@ -153,11 +155,11 @@ command = "scripts/my-score.sh"
 
 ### `ast`
 
-Parses JavaScript and TypeScript files in-process with [oxc-parser](https://oxc.rs/docs/guide/usage/parser.html) and counts matches using one of three sub-features (set exactly one per metric).
+Parses JavaScript and TypeScript files in-process with [oxc-parser](https://oxc.rs/docs/guide/usage/parser.html) and evaluates one of five sub-features (set exactly one per metric). The `max_file_lines` variant operates on raw file contents and does not require the matched files to be parseable JS/TS.
 
 **Common fields:**
 
-- `files` — one or more glob patterns for source files to parse, resolved relative to `fiber.toml`
+- `files` — one or more glob patterns for source files, resolved relative to the **current working directory** when Fiber runs
 - `error_penalty` — penalty per match (default: `1.0`)
 
 **Penalty per file** = `match_count × error_penalty`
@@ -198,6 +200,36 @@ name = "banned_comment_patterns"
 type = "ast"
 files = ["src/**/*.ts"]
 comment_contains = ["TODO", "FIXME", "HACK"]
+error_penalty = 1.0
+```
+
+#### `max_function_lines` — penalize long functions and methods
+
+Counts the line span of each function-like node, including function declarations, function expressions, methods, constructors, getters/setters, and arrow functions.
+
+**Penalty per file** = `sum(max(0, function_lines - max_function_lines)) × error_penalty`
+
+```toml
+[[metrics]]
+name = "long_functions"
+type = "ast"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+max_function_lines = 40
+error_penalty = 1.0
+```
+
+#### `max_file_lines` — penalize long files
+
+Counts physical lines in each matched file, with or without a trailing newline.
+
+**Penalty per file** = `max(0, file_lines - max_file_lines) × error_penalty`
+
+```toml
+[[metrics]]
+name = "long_files"
+type = "ast"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+max_file_lines = 300
 error_penalty = 1.0
 ```
 
