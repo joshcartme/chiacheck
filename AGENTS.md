@@ -1,96 +1,116 @@
-# 🧵 Fiber Project Guidelines
+# AGENTS.md - AI Assistant Guide for Fiber
 
-## Code Style
+Fiber is a Rust CLI that scores frontend project health with configurable metrics, git history traversal, and HTML trend reports. Keep this file terse and agent-focused; target ~120 lines, max 140.
 
-- **Language**: Rust (Edition 2021).
-- **CLI Parsing**: Use `clap` with the `derive` feature in `src/cli.rs`. The `--config` flag is `global = true`; all subcommands inherit it automatically.
-- **Serialization**: Use `serde`, `serde_json`, and `toml` for `fiber.toml`, JSON payloads, and HTML-embedded data.
-- **Entrypoint discipline**: Keep `src/main.rs` as orchestration only. New parsing, scoring, git, and reporting behavior belongs in library modules, not the binary.
+## Agent Rules
 
-## Architecture
+- Rust 2021. Prefer existing modules and patterns.
+- Keep `src/main.rs` orchestration-only; put domain behavior in library modules.
+- Preserve user edits. Do not revert unrelated changes.
+- Use `FiberError` inside library internals when preserving failure category matters.
+- Public APIs often return `anyhow::Result<T>` while constructing `FiberError`; keep that boundary unless intentionally refactoring.
+- `run_metric` is infallible: return `MetricResult`, never `Result`; failures use zero penalties and `details` starting `Error:`.
+- Config/docs/tests move together for user-facing behavior changes.
 
-- **Library/Binary Split**: `src/lib.rs` exposes the project domains; `src/main.rs` wires CLI input to those library functions.
-- **Core Modules**:
-    - `cli.rs`: CLI argument and subcommand definitions.
-    - `config.rs`: Config schema and TOML loading. `DEFAULT_CONFIG` is `fiber.toml`.
-    - `git.rs`: Git command wrappers plus commit-range/date-range traversal helpers.
-    - `metrics/runner.rs`: Metric execution and parsing.
-    - `scorer.rs`: Penalty accumulation scoring and the `HealthScore` type.
-    - `report.rs`: HTML report generation and escaping rules.
-- **Feature placement**: If a change affects parsing rules, scoring semantics, or report generation, update the domain module first and keep `main.rs` thin.
+## Repository Map
+
+- `src/lib.rs`: exposes library modules.
+- `src/cli.rs`: clap definitions; `--config` is `global = true`; default is `fiber.toml`.
+- `src/config.rs`: TOML schema, `MetricConfig`, duplicate metric-name rejection.
+- `src/error.rs`: `FiberError`.
+- `src/git.rs`: git wrappers plus commit/date range traversal.
+- `src/metrics/mod.rs`: `MetricResult`.
+- `src/metrics/runner.rs`: metric execution and parsing.
+- `src/scorer.rs`: penalty tree and `HealthScore`.
+- `src/report.rs`: HTML report generation and escaping.
+- `tests/integration_test.rs`: integration coverage.
+- `tests/fixtures/`: test configs and fixtures.
+- `README.md` and `fiber.example.toml`: keep synced with config/CLI behavior.
+
+## Commands
+
+```bash
+cargo build
+cargo test
+cargo run -- score
+cargo run -- range --from <SHA> --to <SHA> --output report.html
+cargo run -- history --days 30 --output history.html
+cargo fmt
+cargo clippy
+```
 
 ## Key Types
 
-- **`MetricConfig`** (`config.rs`): Deserialized from TOML. `command` is `Option<String>` — required for all types except `ast`. Optional penalty-tuning fields: `error_penalty`, `warning_penalty`. AST-specific fields: `files`, `ast_count_node`, `comment_startswith`, `comment_contains`, `max_function_lines`, `max_file_lines`. Metric names must be unique across the config; `load_config` returns a `FiberError::Config` if duplicates are found.
-- **`MetricResult`** (`metrics/mod.rs`): `Clone + Serialize`. Fields: `name`, `total_penalty`, `attributed: Vec<(String, f64)>`, `unattributed: f64`, `details`. `attributed` holds `(file_path, penalty)` pairs for per-file results; `unattributed` holds the remainder.
-- **`PenaltyNode`** (`scorer.rs`): `Debug + Serialize`. Fields: `path`, `penalties: HashMap<String, f64>`, `children: Vec<PenaltyNode>`. Leaf nodes are files; directory nodes aggregate child penalties per metric key. `total_penalty()` sums all values in `penalties`.
-- **`HealthScore`** (`scorer.rs`): `Debug + Serialize`. Fields: `overall`, `unattributed: HashMap<String, f64>`, `tree: PenaltyNode`, `metrics`, `commit`, `timestamp`. Built by `build_health_score()`.
-- **`CommitInfo`** (`git.rs`): Fields: `sha: String`, `timestamp_unix: i64`. Returned by `get_commits_in_range` and `get_commits_in_date_range`; carries everything needed to check out a commit and record its timestamp without extra `git show` calls.
+- `MetricConfig`: `command: Option<String>`; required except for `ast`. Optional tuning: `error_penalty`, `warning_penalty`. AST fields: `files`, `ast_count_node`, `comment_startswith`, `comment_contains`, `max_function_lines`, `max_file_lines`.
+- `MetricResult` (`Clone+Serialize`): `name`, `total_penalty`, `attributed: Vec<(String, f64)>`, `unattributed`, `details`.
+- `PenaltyNode` (`Debug+Serialize`): file/dir tree with per-metric `penalties`; directory penalties aggregate descendants.
+- `HealthScore` (`Clone+Serialize`): `overall`, `unattributed`, `tree`, `metrics`, `commit`, `timestamp`; built by `build_health_score()`.
+- `CommitInfo`: `sha`, `timestamp_unix`; returned by `get_commits_in_range` / `get_commits_in_date_range`; no extra `git show` needed.
 
-## Error Handling
+## Metric Rules
 
-- **Domain classification**: Use `FiberError` in library internals to preserve failure categories.
-- **Public return types**: Public module APIs currently return `anyhow::Result<T>` in several places while constructing `FiberError` values internally. Preserve that pattern unless you are intentionally refactoring the API boundary.
-- **Top-level boundary**: `src/main.rs` uses `anyhow::Result<()>` and should stay focused on orchestration and user-facing messages.
-- **`run_metric` is infallible**: It must keep returning `MetricResult`, never `Result`. Failures are represented as `total_penalty: 0.0`, empty `attributed`, `unattributed: 0.0`, and `details` beginning with `Error:`.
-
-## Metric Execution and Parsing
-
-- **Command runner**: Metric commands execute via `sh -c`.
-- **Parsing source**: Parse metric values from stdout. A non-zero exit status is treated as a command failure and ultimately becomes a zero-score `MetricResult`.
-- **Metric types are stringly-typed**: `metric_type` is matched as `&str` in `metrics/runner.rs`. The valid values are `lint`, `coverage`, `count`, `percentage`, `score`, and `ast`.
-- **Adding a metric type**: Update the `match` in `metrics/runner.rs`, any config-facing docs in `README.md`, examples in `fiber.example.toml` when relevant, and integration tests.
-- **`lint` contract**: Prefer an ESLint-style JSON array where each file entry has `filePath`, `errorCount`, and `warningCount`. Per-file penalties are attributed using `make_relative`. If JSON parsing fails, fall back to counting lines containing `error` or `warning` case-insensitively; those penalties are unattributed.
-- **`coverage` contract**: Prefer Istanbul/c8-style JSON: per-file entries at `[filePath].lines.pct` produce attributed `100 - pct` penalties (0-penalty files are omitted). Falls back to reading `total.lines.pct`, then to a raw numeric percentage on stdout — both produce an unattributed penalty.
-- **`count` contract**: Expect a finite numeric stdout value. The raw value is the unattributed penalty.
-- **`percentage` contract**: Accept numeric output with or without a trailing `%`. The raw value is the unattributed penalty.
-- **`score` contract**: Expect a raw numeric score on stdout. The raw value is the unattributed penalty.
-- **`ast` contract**: No command required. Exactly one of: `ast_count_node`, `comment_startswith`, `comment_contains`, `max_function_lines`, or `max_file_lines`. Parses JS/TS with oxc for all modes except `max_file_lines` (raw line counts only). Counts AST nodes, comment matches, excess function span lines over `max_function_lines`, or excess file line count over `max_file_lines`. Penalties are attributed per file and multiplied by `error_penalty` (default 1.0) when set.
-- **`make_relative` helper**: Used by metric runners to normalize absolute paths to paths relative to the **working directory** (the `Path` passed into `run_metric` / `run_all_metrics`, which the CLI sets to `std::env::current_dir()`). Falls back to the original string if strip_prefix fails.
-- **`run_all_metrics`**: Runs all configured metrics in parallel on the rayon thread pool. Pre-reads all source files needed by AST metrics into a shared `source_cache` so files are not re-read per metric. Prefer this over calling `run_metric` in a loop.
+- Valid `type` strings: `lint`, `coverage`, `count`, `percentage`, `score`, `ast`.
+- Commands run via `sh -c`.
+- Exit codes: `lint` uses `LINT_COMMAND_COMPLETED_CODES` (`&[0, 1]`); all others use `DEFAULT_COMMAND_COMPLETED_CODES` (`&[0]`).
+- Parse stdout only after an acceptable exit code; failures include captured stdout/stderr in `details`.
+- `lint`: prefer ESLint JSON array with `filePath`, `errorCount`, `warningCount`; fallback counts `error`/`warning` lines case-insensitively as unattributed.
+- `coverage`: prefer Istanbul/c8 per-file `[filePath].lines.pct`; penalty is `100 - pct`; zero-penalty files omitted from attributed; fallback to `total.lines.pct`, then raw numeric percentage.
+- `count`: finite numeric stdout; raw value is unattributed penalty.
+- `percentage`: finite numeric stdout with optional `%`; raw value is unattributed penalty.
+- `score`: finite numeric stdout; raw value is unattributed penalty.
+- `ast`: no command. Exactly one mode: `ast_count_node`, `comment_startswith`, `comment_contains`, `max_function_lines`, or `max_file_lines`.
+- `ast` parses JS/TS with oxc except `max_file_lines` (raw line counts). Modes count: AST nodes, comment matches, excess function-span lines over limit, or excess file lines over limit.
+- `error_penalty` defaults to `1.0`; `warning_penalty` defaults to `0.5` for lint.
+- `make_relative` normalizes to the working directory passed into `run_metric` / `run_all_metrics`.
+- Prefer `run_all_metrics`; it runs in parallel and preloads AST source files into `source_cache`.
 
 ## Scoring Rules
 
-- **Penalty accumulation**: `build_health_score` replaces the old weighted-average model. Penalties are unbounded, non-negative, and lower is better. A score of `0.0` is perfect.
-- **`overall`**: The sum of all unattributed penalties plus `tree.total_penalty()`.
-- **Tree construction**: `build_health_score` flattens `MetricResult.attributed` entries into a `HashMap<file_path, HashMap<metric_name, penalty>>`, then builds a `PenaltyNode` tree by splitting paths on `/`. `aggregate_penalties` propagates child penalties upward so every directory node's `penalties` map reflects the sum of all descendants per metric key.
-- **Unattributed bucket**: Penalties that cannot be attributed to a specific file are stored in `HealthScore.unattributed` keyed by metric name.
-- **No clamping**: There is no upper bound on penalties. Do not clamp outputs in `run_metric`.
+- Lower is better; `0.0` is perfect.
+- Penalties are unbounded, non-negative, and never clamped.
+- `overall = sum(unattributed) + tree.total_penalty()`.
+- Build the tree from attributed `(file_path, penalty)` entries split on `/`.
+- `aggregate_penalties` rolls child sums into ancestor `penalties` maps per metric key.
+- Store unattributed penalties in `HealthScore.unattributed` keyed by metric name.
 
-## Git Traversal Pattern
+## Git Traversal
 
-When checking out commits for scoring, always follow this pattern:
+- Before checkout, capture `git::get_head_ref()`.
+- Iterate commits chronological oldest to newest; helpers already reverse `git log`.
+- Inside `score_commits`, do not use `?` in the per-commit loop.
+- On per-commit errors, log, mark partial, continue.
+- Always call `git::restore_head(&head_ref)` after the loop.
+- `restore_head` must handle branch names and detached SHAs.
+- Date-range history should stay duplicate-free; tests assert no duplicate SHAs.
 
-1. Capture `git::get_head_ref()` before any checkout.
-2. Iterate commits in chronological order, oldest to newest. The helpers in `git.rs` already reverse `git log` output to preserve that order.
-3. Do not use `?` inside the per-commit loop in `score_commits`; log the error, mark the run as partial, and continue so the restore step still happens.
-4. Call `git::restore_head(&head_ref)` unconditionally after the loop.
+## Reports and HTML
 
-Additional git invariants:
+- Escape user-controlled text with `htmlize::escape_text()`.
+- JSON inside `<script>` must go through `json_for_html_script()` so `</script>` becomes safe.
+- Never interpolate raw metric names, details, commit labels, or dates into HTML.
+- Chart.js is pinned with SRI; keep pinning explicit if changed.
+- Report chart is stacked bar: one dataset per metric, x-axis commits, y-axis total penalty. Missing values: chart `0.0`, table `-`.
 
-- `restore_head` must work for both branch names and detached SHAs returned by `get_head_ref`.
-- Date-range history should remain duplicate-free.
-- If you change range semantics, update both the git helpers and the tests that assert no duplicate SHAs.
+## Common Tasks
 
-## Reporting and HTML Safety
+- Add/change metric type: update `src/metrics/runner.rs`, README config docs, `fiber.example.toml` if relevant, and integration tests.
+- Change CLI: update `src/cli.rs`, keep `src/main.rs` thin, update README CLI docs.
+- Change scoring: update `src/scorer.rs`; preserve penalty accumulation semantics and add focused tests.
+- Change git range semantics: update `src/git.rs` and tests for chronological, duplicate-free output.
+- Change reports: update `src/report.rs`; preserve escaping and `json_for_html_script()` coverage.
+- Change config fields: update `MetricConfig`, loader validation, README, example config, tests.
 
-- Escape all user-controlled HTML text with `htmlize::escape_text()`.
-- Any JSON embedded inside `<script>` tags must go through `json_for_html_script()` so `</script>` is escaped safely.
-- Do not interpolate raw metric names, details, commit labels, or dates into HTML.
-- The report currently depends on a pinned Chart.js CDN asset with SRI. If you change that dependency, keep the pinning/integrity story explicit.
-- The report uses a stacked bar chart (`type: 'bar'`, `stacked: true` on both axes). One dataset per metric name; the x-axis is commits and the y-axis is total penalty. Lower bars are better. Missing metric values are rendered as `0.0` in the chart and `-` in the table.
+## Testing
 
-## Build, Tests, and Fixtures
+- Integration tests live in `tests/integration_test.rs`.
+- Fixtures live in `tests/fixtures/`.
+- Construct `MetricConfig` via struct literals; set all `Option` fields explicitly.
+- Use float tolerances like `(actual - expected).abs() < 0.01`.
+- Git-sensitive tests should skip gracefully when git/history is unavailable.
+- After substantive Rust edits, run focused tests or `cargo test`; run `cargo fmt` when formatting may change.
 
-- **Build**: Use `cargo build` and `cargo run`.
-- **Tests**: Integration tests live in `tests/integration_test.rs`.
-- **Fixtures**: Keep sample configs and other fixture data under `tests/fixtures/`.
-- **Constructing config in tests**: Build `MetricConfig` via struct literal and set all `Option` fields explicitly. There is no builder or `Default` implementation.
-- **Float assertions**: Use tolerance checks such as `(actual - expected).abs() < 0.01`.
-- **Git-sensitive tests**: Skip gracefully when git is unavailable or the repository does not have enough history for the scenario.
+## Docs Sync
 
-## Documentation Sync Rules
-
-- If you change config fields or metric semantics, update `README.md`, `fiber.example.toml`, and affected tests in the same change.
-- If you change CLI flags or subcommand behavior, update both `src/cli.rs` and the CLI documentation in `README.md`.
-- If you change report output structure or escaping behavior, update tests or add new coverage as needed and keep the HTML safety notes in this file accurate.
+- Config fields or metric semantics: update `README.md`, `fiber.example.toml`, and tests.
+- CLI flags/subcommands: update `src/cli.rs` and README CLI docs.
+- Report structure/escaping: update tests and keep HTML safety guidance accurate.

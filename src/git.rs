@@ -1,5 +1,6 @@
 use crate::error::FiberError;
 use anyhow::Result;
+use std::collections::HashSet;
 use std::process::{Command, Stdio};
 
 /// A commit SHA paired with its unix timestamp, returned by the git log helpers
@@ -44,29 +45,50 @@ fn run_git_status(args: &[&str]) -> Result<()> {
 }
 
 /// Parse `git log --pretty=format:%H%x09%ct` output into CommitInfo values.
-fn parse_commit_info_lines(output: &str) -> Vec<CommitInfo> {
-    output
-        .lines()
-        .filter_map(|l| {
-            let l = l.trim();
-            if l.is_empty() {
-                return None;
-            }
-            let mut parts = l.splitn(2, '\t');
-            let sha = parts.next()?.to_string();
-            let ts: i64 = parts.next().and_then(|t| t.parse().ok()).unwrap_or(0);
-            Some(CommitInfo {
-                sha,
-                timestamp_unix: ts,
-            })
-        })
-        .collect()
+fn parse_commit_info_lines(output: &str) -> Result<Vec<CommitInfo>> {
+    let mut commits = Vec::new();
+
+    for (index, line) in output.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let (sha, timestamp) = line.split_once('\t').ok_or_else(|| {
+            FiberError::Git(format!(
+                "Malformed git log line {}: expected '<sha>\\t<timestamp>'",
+                index + 1
+            ))
+        })?;
+        if sha.is_empty() {
+            return Err(FiberError::Git(format!(
+                "Malformed git log line {}: empty SHA",
+                index + 1
+            ))
+            .into());
+        }
+        let timestamp_unix = timestamp.parse::<i64>().map_err(|e| {
+            FiberError::Git(format!(
+                "Malformed git log line {}: invalid timestamp '{}': {}",
+                index + 1,
+                timestamp,
+                e
+            ))
+        })?;
+
+        commits.push(CommitInfo {
+            sha: sha.to_string(),
+            timestamp_unix,
+        });
+    }
+
+    Ok(commits)
 }
 
 pub fn get_commits_in_range(from: &str, to: &str) -> Result<Vec<CommitInfo>> {
     let range = format!("{}..{}", from, to);
     let output = run_git(&["log", "--pretty=format:%H%x09%ct", &range])?;
-    let mut commits = parse_commit_info_lines(&output);
+    let mut commits = parse_commit_info_lines(&output)?;
     commits.reverse();
     Ok(commits)
 }
@@ -75,9 +97,10 @@ pub fn get_commits_in_date_range(from: &str, to: &str) -> Result<Vec<CommitInfo>
     let after = format!("--after={}", from);
     let before = format!("--before={}", to);
     let output = run_git(&["log", "--pretty=format:%H%x09%ct", &after, &before])?;
-    let mut commits = parse_commit_info_lines(&output);
+    let mut commits = parse_commit_info_lines(&output)?;
     commits.reverse();
-    commits.dedup_by(|a, b| a.sha == b.sha);
+    let mut seen = HashSet::new();
+    commits.retain(|info| seen.insert(info.sha.clone()));
     Ok(commits)
 }
 
@@ -104,4 +127,34 @@ pub fn get_head_ref() -> Result<String> {
 /// branch if the ref is a branch name, or enter detached HEAD for a SHA.
 pub fn restore_head(head_ref: &str) -> Result<()> {
     run_git_status(&["checkout", head_ref])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_commit_info_lines;
+
+    #[test]
+    fn parse_commit_info_lines_parses_sha_and_timestamp() {
+        let commits = parse_commit_info_lines("abc123\t1710000000\n").unwrap();
+
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].sha, "abc123");
+        assert_eq!(commits[0].timestamp_unix, 1_710_000_000);
+    }
+
+    #[test]
+    fn parse_commit_info_lines_rejects_missing_timestamp() {
+        let error = parse_commit_info_lines("abc123").unwrap_err().to_string();
+
+        assert!(error.contains("Malformed git log line"));
+    }
+
+    #[test]
+    fn parse_commit_info_lines_rejects_invalid_timestamp() {
+        let error = parse_commit_info_lines("abc123\tnope")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("invalid timestamp"));
+    }
 }

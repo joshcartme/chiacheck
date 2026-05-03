@@ -20,12 +20,12 @@ warning_penalty = 0.5
 [[metrics]]
 name = "test_coverage"
 type = "coverage"
-command = "npx vitest run --coverage --reporter=json"
+command = "npx vitest run --coverage --reporter=json 2>/dev/null | tail -1"
 
 [[metrics]]
 name = "typescript_errors"
 type = "count"
-command = "npx tsc --noEmit 2>&1 | grep 'error TS' | wc -l"
+command = "npx tsc --noEmit 2>&1 | grep 'error TS' | wc -l | tr -d ' '"
 
 [[metrics]]
 name = "custom_penalty"

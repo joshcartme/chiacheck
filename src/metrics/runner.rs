@@ -12,23 +12,68 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
+type SourceCache = HashMap<PathBuf, Result<Arc<String>, String>>;
+
+/// Exit codes that mean the shell command finished in a way we still treat as usable stdout.
+/// Defaults to **`0` only**; lint metrics use [`LINT_COMMAND_COMPLETED_CODES`] (ESLint-style **0** / **1**).
+const DEFAULT_COMMAND_COMPLETED_CODES: &[i32] = &[0];
+
+/// Exit codes for `lint` metrics: **0** = clean; **1** = findings with usable JSON on stdout;
+/// other codes are fatal.
+const LINT_COMMAND_COMPLETED_CODES: &[i32] = &[0, 1];
+
+fn command_exit_acceptable(status: std::process::ExitStatus, completed_codes: &[i32]) -> bool {
+    match status.code() {
+        Some(code) => completed_codes.contains(&code),
+        None => false,
+    }
+}
+
+fn format_command_failure(status: std::process::ExitStatus, stdout: &str, stderr: &str) -> String {
+    let mut msg = format!("Command failed ({}):", status);
+    let out_trim = stdout.trim();
+    let err_trim = stderr.trim();
+    if !out_trim.is_empty() {
+        msg.push_str("\nstdout:\n");
+        msg.push_str(out_trim);
+    }
+    if !err_trim.is_empty() {
+        msg.push_str("\nstderr:\n");
+        msg.push_str(err_trim);
+    }
+    if out_trim.is_empty() && err_trim.is_empty() {
+        msg.push_str(" (no output)");
+    }
+    msg
+}
+
+/// Runs `command` via [`run_command_with_completed_codes`] with [`DEFAULT_COMMAND_COMPLETED_CODES`]
+/// (exit **0** only).
 fn run_command(command: &str) -> Result<String, String> {
+    run_command_with_completed_codes(command, DEFAULT_COMMAND_COMPLETED_CODES)
+}
+
+/// Runs `command` through `sh -c`. Returns stdout when the process exit code is one of
+/// `command_completed_codes`; otherwise returns an error that includes captured stdout and stderr.
+/// Non-success signals (no exit code) are always treated as failure.
+fn run_command_with_completed_codes(
+    command: &str,
+    command_completed_codes: &[i32],
+) -> Result<String, String> {
     let output = Command::new("sh")
         .arg("-c")
         .arg(command)
         .output()
         .map_err(|e| format!("Failed to execute command: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "Command failed ({}): {}",
-            output.status,
-            stderr.trim()
-        ));
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    if command_exit_acceptable(output.status, command_completed_codes) {
+        Ok(stdout)
+    } else {
+        Err(format_command_failure(output.status, &stdout, &stderr))
+    }
 }
 
 fn require_command(config: &MetricConfig) -> Result<&str, String> {
@@ -45,6 +90,39 @@ fn make_relative(abs_path: &Path, working_directory: &Path) -> String {
         .strip_prefix(working_directory)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| abs_path.to_string_lossy().into_owned())
+}
+
+fn parse_finite_non_negative(raw: &str, label: &str) -> Result<f64, String> {
+    let value = raw
+        .parse::<f64>()
+        .map_err(|_| format!("Cannot parse {} output: {}", label, raw))?;
+
+    if !value.is_finite() {
+        return Err(format!("{} output is not finite: {}", label, value));
+    }
+    if value < 0.0 {
+        return Err(format!("{} output is negative: {}", label, value));
+    }
+
+    Ok(value)
+}
+
+fn parse_percentage_value(raw: &str, label: &str) -> Result<f64, String> {
+    parse_finite_non_negative(raw.trim().trim_end_matches('%'), label)
+}
+
+fn coverage_penalty(pct: f64) -> Result<f64, String> {
+    if !pct.is_finite() {
+        return Err(format!("Coverage percentage is not finite: {}", pct));
+    }
+    if !(0.0..=100.0).contains(&pct) {
+        return Err(format!(
+            "Coverage percentage must be between 0 and 100: {}",
+            pct
+        ));
+    }
+
+    Ok(100.0 - pct)
 }
 
 // Internal return type: (attributed, unattributed, details)
@@ -75,7 +153,7 @@ fn into_metric_result(config: &MetricConfig, result: RunResult) -> MetricResult 
 fn dispatch(
     config: &MetricConfig,
     working_directory: &Path,
-    source_cache: Option<&HashMap<PathBuf, Arc<String>>>,
+    source_cache: Option<&SourceCache>,
 ) -> RunResult {
     match config.metric_type.as_str() {
         "lint" => match require_command(config) {
@@ -127,11 +205,8 @@ pub fn run_all_metrics(configs: &[MetricConfig], working_directory: &Path) -> Ve
 
 /// Pre-read every file referenced by AST metrics so each file is read from
 /// disk at most once regardless of how many AST metrics target it.
-fn build_source_cache(
-    configs: &[MetricConfig],
-    working_directory: &Path,
-) -> HashMap<PathBuf, Arc<String>> {
-    let mut cache: HashMap<PathBuf, Arc<String>> = HashMap::new();
+fn build_source_cache(configs: &[MetricConfig], working_directory: &Path) -> SourceCache {
+    let mut cache: SourceCache = HashMap::new();
     for config in configs {
         if config.metric_type != "ast" {
             continue;
@@ -140,7 +215,9 @@ fn build_source_cache(
             if let Ok(paths) = resolve_files(patterns, working_directory) {
                 for path in paths {
                     cache.entry(path.clone()).or_insert_with(|| {
-                        Arc::new(std::fs::read_to_string(&path).unwrap_or_default())
+                        std::fs::read_to_string(&path)
+                            .map(Arc::new)
+                            .map_err(|e| format!("Cannot read {}: {}", path.display(), e))
                     });
                 }
             }
@@ -164,7 +241,7 @@ struct LintFileResult {
 /// Penalties are attributed per file. Falls back to a single unattributed penalty from
 /// counting lines containing "error" or "warning".
 fn run_lint_tool(command: &str, config: &MetricConfig, working_directory: &Path) -> RunResult {
-    let output = run_command(command)?;
+    let output = run_command_with_completed_codes(command, LINT_COMMAND_COMPLETED_CODES)?;
 
     let error_penalty = config.error_penalty.unwrap_or(1.0);
     let warning_penalty = config.warning_penalty.unwrap_or(0.5);
@@ -236,7 +313,7 @@ fn run_coverage(command: &str, working_directory: &Path) -> RunResult {
             }
             if let Some(ref lines) = entry.lines {
                 found_file = true;
-                let penalty = 100.0 - lines.pct;
+                let penalty = coverage_penalty(lines.pct)?;
                 if penalty > 0.0 {
                     let rel = make_relative(Path::new(key), working_directory);
                     attributed.push((rel, penalty));
@@ -253,50 +330,37 @@ fn run_coverage(command: &str, working_directory: &Path) -> RunResult {
         }
         if let Some(total) = coverage.get("total") {
             if let Some(ref lines) = total.lines {
-                let penalty = 100.0 - lines.pct;
+                let penalty = coverage_penalty(lines.pct)?;
                 return Ok((Vec::new(), penalty, format!("{:.1}% coverage", lines.pct)));
             }
         }
     }
 
     // Fallback: raw numeric percentage
-    if let Ok(pct) = trimmed.parse::<f64>() {
-        let penalty = 100.0 - pct;
-        return Ok((Vec::new(), penalty, format!("{:.1}% coverage", pct)));
-    }
-
-    Err(format!("Cannot parse coverage output: {}", trimmed))
+    let pct = parse_percentage_value(trimmed, "coverage")?;
+    let penalty = coverage_penalty(pct)?;
+    Ok((Vec::new(), penalty, format!("{:.1}% coverage", pct)))
 }
 
 /// The command output is the raw penalty value (unattributed).
 fn run_count(command: &str) -> RunResult {
     let output = run_command(command)?;
-    let trimmed = output.trim();
-    match trimmed.parse::<f64>() {
-        Ok(count) if count.is_finite() => Ok((Vec::new(), count, format!("{} issues", count))),
-        Ok(count) => Err(format!("Count output is not finite: {}", count)),
-        Err(_) => Err(format!("Cannot parse count output: {}", trimmed)),
-    }
+    let count = parse_finite_non_negative(output.trim(), "count")?;
+    Ok((Vec::new(), count, format!("{} issues", count)))
 }
 
 /// The command output is the raw penalty value (unattributed).
 fn run_percentage(command: &str) -> RunResult {
     let output = run_command(command)?;
-    let trimmed = output.trim().trim_end_matches('%');
-    match trimmed.parse::<f64>() {
-        Ok(pct) => Ok((Vec::new(), pct, format!("{:.1}", pct))),
-        Err(_) => Err(format!("Cannot parse percentage output: {}", trimmed)),
-    }
+    let pct = parse_percentage_value(output.trim(), "percentage")?;
+    Ok((Vec::new(), pct, format!("{:.1}", pct)))
 }
 
 /// The command output is the raw penalty value (unattributed).
 fn run_score_type(command: &str) -> RunResult {
     let output = run_command(command)?;
-    let trimmed = output.trim();
-    match trimmed.parse::<f64>() {
-        Ok(penalty) => Ok((Vec::new(), penalty, format!("penalty: {:.1}", penalty))),
-        Err(_) => Err(format!("Cannot parse score output: {}", trimmed)),
-    }
+    let penalty = parse_finite_non_negative(output.trim(), "score")?;
+    Ok((Vec::new(), penalty, format!("penalty: {:.1}", penalty)))
 }
 
 fn resolve_files(patterns: &[String], working_directory: &Path) -> Result<Vec<PathBuf>, String> {
@@ -434,7 +498,7 @@ impl<'a> Visit<'a> for AstFunctionLengthCounter<'_> {
 fn run_ast(
     config: &MetricConfig,
     working_directory: &Path,
-    source_cache: Option<&HashMap<PathBuf, Arc<String>>>,
+    source_cache: Option<&SourceCache>,
 ) -> RunResult {
     let has_count_node = config.ast_count_node.is_some();
     let has_startswith = config.comment_startswith.is_some();
@@ -482,7 +546,8 @@ fn run_ast(
         // Use pre-read source from cache when available to avoid re-reading disk (#10).
         // Clone the Arc (pointer copy) rather than the string contents.
         let source_text: Arc<String> = match source_cache.and_then(|c| c.get(path)) {
-            Some(s) => Arc::clone(s),
+            Some(Ok(s)) => Arc::clone(s),
+            Some(Err(e)) => return Err(e.clone()),
             None => Arc::new(
                 std::fs::read_to_string(path)
                     .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?,

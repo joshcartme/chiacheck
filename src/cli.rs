@@ -35,15 +35,15 @@ pub enum Commands {
     /// Calculate health scores for a date range
     History {
         /// Start date (YYYY-MM-DD)
-        #[arg(long)]
+        #[arg(long, requires = "to", conflicts_with = "days")]
         from: Option<String>,
 
         /// End date (YYYY-MM-DD)
-        #[arg(long)]
+        #[arg(long, requires = "from", conflicts_with = "days")]
         to: Option<String>,
 
         /// Last N days (alternative to --from/--to)
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["from", "to"])]
         days: Option<u32>,
 
         /// Output HTML report path

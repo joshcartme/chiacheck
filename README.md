@@ -8,7 +8,7 @@
 
 ```bash
 # Clone and build from source
-git clone https://github.com/your-org/fiber.git
+git clone <your-fiber-repo-url>
 cd fiber
 cargo build --release
 # Binary is at target/release/fiber
@@ -65,6 +65,10 @@ Fiber reads `fiber.toml` from the current working directory by default (override
 
 Runs a linter via shell `command` and computes penalty from its output. Prefers a **JSON array** of per-file objects with `filePath`, `errorCount`, and `warningCount` (ESLint `--format json` shape). Penalties are **attributed per file**. If JSON parsing fails, falls back to counting lines containing `error` or `warning` (case-insensitive); those penalties are **unattributed**.
 
+For ESLint-compatible exit codes, Fiber still parses stdout when the process exits **0** (no errors, warnings within `--max-warnings`) or **1** (lint findings). Exit code **2** or any other code is treated as a failed run; Fiber surfaces stdout and stderr in the error details so configuration or runtime failures are visible.
+
+Other metric types that run a shell command accept only exit **0** before stdout is parsed.
+
 **Penalty per file** = `errors × error_penalty + warnings × warning_penalty`
 
 Add one `[[metrics]]` block per linter (distinct `name` and `command`).
@@ -95,7 +99,7 @@ warning_penalty = 0.5
 
 ### `coverage`
 
-Parses test coverage output. Prefers Istanbul/c8 JSON where per-file entries carry `[filePath].lines.pct`. Each file whose coverage is less than 100% contributes an **attributed** penalty. Falls back to `total.lines.pct`, then to a raw numeric percentage on stdout — both produce an **unattributed** penalty.
+Parses test coverage output. Prefers Istanbul/c8 JSON where per-file entries carry `[filePath].lines.pct`. Each file whose coverage is less than 100% contributes an **attributed** penalty. Falls back to `total.lines.pct`, then to a raw numeric percentage on stdout, with or without `%` — both produce an **unattributed** penalty. Coverage percentages must be finite values from `0` through `100`.
 
 **Penalty per file** = `100 - coverage_pct` (files at 100% contribute 0 and are omitted)
 
@@ -110,7 +114,7 @@ command = "npx vitest run --coverage --reporter=json 2>/dev/null | tail -1"
 
 ### `count`
 
-Expects a command that outputs a single number — the count of issues found. The raw value is the **unattributed penalty**.
+Expects a command that outputs a single finite, non-negative number — the count of issues found. The raw value is the **unattributed penalty**.
 
 ```toml
 [[metrics]]
@@ -125,7 +129,7 @@ command = "npx tsc --noEmit 2>&1 | grep 'error TS' | wc -l | tr -d ' '"
 
 ### `percentage`
 
-Expects a command that outputs a percentage value (with or without `%`). The raw value is the **unattributed penalty**.
+Expects a command that outputs a finite, non-negative percentage value (with or without `%`). The raw value is the **unattributed penalty**.
 
 ```toml
 [[metrics]]
@@ -140,7 +144,7 @@ command = "scripts/axe-score.sh"
 
 ### `score`
 
-Expects a command that outputs a raw numeric value. The raw value is the **unattributed penalty**.
+Expects a command that outputs a finite, non-negative numeric value. The raw value is the **unattributed penalty**.
 
 ```toml
 [[metrics]]
@@ -268,11 +272,11 @@ fiber range --from <SHA> --to <SHA> [--output report.html]
 
 | Flag       | Description                           |
 | ---------- | ------------------------------------- |
-| `--from`   | Start commit SHA                      |
+| `--from`   | Start commit SHA (exclusive, using git `from..to` semantics) |
 | `--to`     | End commit SHA (inclusive)            |
 | `--output` | Optional path to write an HTML report |
 
-Fiber will check out each commit in the range, run metrics, restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
+Fiber will check out each commit in the git range `from..to`, run metrics, restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
 
 ```bash
 fiber range --from abc1234 --to def5678 --output report.html
@@ -295,6 +299,8 @@ fiber history [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days N] [--output report.
 | `--days`   | Shorthand: last N days                |
 | `--output` | Optional path to write an HTML report |
 
+Use either `--days` or the pair `--from` and `--to`. The date range is passed to git as `--after=<from>` and `--before=<to>`, so it follows git's date parsing and boundary behavior.
+
 ```bash
 # Last 30 days, with HTML output
 fiber history --days 30 --output history.html
@@ -312,7 +318,7 @@ When `--output` is provided to `range` or `history`, Fiber generates an HTML rep
 - An interactive **Chart.js stacked bar chart** showing penalty by metric over commits (x-axis = commits, y-axis = total penalty). Lower bars are better; a bar of height 0 means a perfect score.
 - A **data table** with per-commit penalty totals and metric details.
 
-> **Note:** The report loads Chart.js from a CDN. Viewing the chart requires network access.
+> **Note:** The report loads pinned Chart.js 4.5.0 from a CDN with a Subresource Integrity hash. Viewing the chart requires network access.
 
 ## Custom Metrics Guide
 
