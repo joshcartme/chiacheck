@@ -1,13 +1,13 @@
 use crate::config::MetricConfig;
 use crate::metrics::MetricResult;
 use oxc_allocator::Allocator;
-use oxc_ast::AstKind;
+use oxc_ast::ast_kind::AST_TYPE_MAX;
+use oxc_ast::{AstKind, AstType};
 use oxc_ast_visit::Visit;
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{SourceType, Span};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -391,21 +391,76 @@ fn resolve_files(patterns: &[String], working_directory: &Path) -> Result<Vec<Pa
     Ok(paths)
 }
 
-/// AST node visitor that counts nodes matching a target variant name (#9).
-/// Uses a reusable `buf` field to avoid allocating a new String per node.
-struct AstNodeCounter {
-    target: String,
-    count: usize,
-    buf: String,
+/// Resolves a token to [`AstType`] when it equals that variant's [`Debug`] output (the enum
+/// variant spelling used by oxc, e.g. `TSAnyKeyword`, `TSAsExpression`).
+///
+/// # Safety
+///
+/// [`AstType`] is `#[repr(u8)]` with contiguous discriminants `0..=AST_TYPE_MAX`.
+fn ast_type_from_kind_token(name: &str) -> Option<AstType> {
+    (0..=AST_TYPE_MAX).find_map(|byte| {
+        // SAFETY: Every discriminant in `0..=AST_TYPE_MAX` corresponds to exactly one `AstType`
+        // variant (`AstType` defines variants through byte 187 with no holes).
+        let ty = unsafe { std::mem::transmute::<u8, AstType>(byte) };
+        if format!("{ty:?}") == name {
+            Some(ty)
+        } else {
+            None
+        }
+    })
 }
 
-impl<'a> Visit<'a> for AstNodeCounter {
+/// Counts AST nodes for [`ast_count_type_reference`](crate::config::MetricConfig::ast_count_type_reference).
+///
+/// Each entry is classified once when the counter is built:
+///
+/// - If it equals an oxc [`AstType`] variant name (same spelling as in Rust / `Debug`, e.g.
+///   `TSAnyKeyword`), visits match [`AstKind::ty()`] first.
+/// - The legacy token `"any"` is treated as [`AstType::TSAnyKeyword`].
+/// - Otherwise the token names a [`TSTypeReference`] identifier (simple identifier `Foo`, not
+///   `Foo.Bar`).
+struct AstTypeReferenceCounter {
+    ast_types: HashSet<AstType>,
+    identifier_targets: HashSet<String>,
+    count: usize,
+}
+
+impl AstTypeReferenceCounter {
+    fn new(targets: Vec<String>) -> Self {
+        let mut ast_types = HashSet::new();
+        let mut identifier_targets = HashSet::new();
+        for t in targets {
+            if t == "any" {
+                ast_types.insert(AstType::TSAnyKeyword);
+                continue;
+            }
+            if let Some(ty) = ast_type_from_kind_token(&t) {
+                ast_types.insert(ty);
+            } else {
+                identifier_targets.insert(t);
+            }
+        }
+        Self {
+            ast_types,
+            identifier_targets,
+            count: 0,
+        }
+    }
+}
+
+impl<'a> Visit<'a> for AstTypeReferenceCounter {
     fn enter_node(&mut self, kind: AstKind<'a>) {
-        self.buf.clear();
-        let _ = write!(self.buf, "{:?}", kind);
-        let variant_name = self.buf.split('(').next().unwrap_or("").trim();
-        if variant_name == self.target {
+        let ty = kind.ty();
+        if self.ast_types.contains(&ty) {
             self.count += 1;
+            return;
+        }
+        if let AstKind::TSTypeReference(r) = kind {
+            if let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &r.type_name {
+                if self.identifier_targets.contains(id.name.as_str()) {
+                    self.count += 1;
+                }
+            }
         }
     }
 }
@@ -500,13 +555,13 @@ fn run_ast(
     working_directory: &Path,
     source_cache: Option<&SourceCache>,
 ) -> RunResult {
-    let has_count_node = config.ast_count_node.is_some();
+    let has_count_type_reference = config.ast_count_type_reference.is_some();
     let has_startswith = config.comment_startswith.is_some();
     let has_contains = config.comment_contains.is_some();
     let has_max_function_lines = config.max_function_lines.is_some();
     let has_max_file_lines = config.max_file_lines.is_some();
     let feature_count = [
-        has_count_node,
+        has_count_type_reference,
         has_startswith,
         has_contains,
         has_max_function_lines,
@@ -517,13 +572,13 @@ fn run_ast(
     .count();
     if feature_count == 0 {
         return Err(
-            "ast metric requires exactly one of: ast_count_node, comment_startswith, comment_contains, max_function_lines, max_file_lines"
+            "ast metric requires exactly one of: ast_count_type_reference, comment_startswith, comment_contains, max_function_lines, max_file_lines"
                 .to_string(),
         );
     }
     if feature_count > 1 {
         return Err(
-            "ast metric allows only one of: ast_count_node, comment_startswith, comment_contains, max_function_lines, max_file_lines"
+            "ast metric allows only one of: ast_count_type_reference, comment_startswith, comment_contains, max_function_lines, max_file_lines"
                 .to_string(),
         );
     }
@@ -593,12 +648,8 @@ fn run_ast(
             continue;
         }
 
-        let file_count = if let Some(target) = &config.ast_count_node {
-            let mut counter = AstNodeCounter {
-                target: target.clone(),
-                count: 0,
-                buf: String::new(),
-            };
+        let file_count = if let Some(targets) = &config.ast_count_type_reference {
+            let mut counter = AstTypeReferenceCounter::new(targets.clone());
             counter.visit_program(&ret.program);
             counter.count
         } else if let Some(needles) = &config.comment_startswith {

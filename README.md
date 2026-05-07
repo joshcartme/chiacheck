@@ -38,24 +38,24 @@ Fiber reads `fiber.toml` from the current working directory by default (override
 
 ### Common fields
 
-| Field     | Type         | Required                    | Description                                                       |
-| --------- | ------------ | --------------------------- | ----------------------------------------------------------------- |
-| `name`    | string       | ✅                          | Unique display name for the metric                                |
-| `type`    | string       | ✅                          | Metric type (see below)                                           |
-| `command` | string       | ✅ (not required for `ast`) | Shell command to run                                              |
+| Field     | Type         | Required                    | Description                                                                    |
+| --------- | ------------ | --------------------------- | ------------------------------------------------------------------------------ |
+| `name`    | string       | ✅                          | Unique display name for the metric                                             |
+| `type`    | string       | ✅                          | Metric type (see below)                                                        |
+| `command` | string       | ✅ (not required for `ast`) | Shell command to run                                                           |
 | `files`   | string array | `ast` only                  | Glob patterns for files to inspect (relative to the process working directory) |
 
 ### Type-specific fields
 
-| Field                | Type         | Used by       | Description                                             |
-| -------------------- | ------------ | ------------- | ------------------------------------------------------- |
-| `error_penalty`      | float        | `lint`, `ast` | Penalty per error or AST match (default: 1.0)           |
-| `warning_penalty`    | float        | `lint`        | Penalty per warning (default: 0.5)                      |
-| `ast_count_node`     | string       | `ast`         | AST node type to count (e.g. `"TSAnyKeyword"`)          |
-| `comment_startswith` | string array | `ast`         | Count comments whose trimmed text starts with any entry |
-| `comment_contains`   | string array | `ast`         | Count comments whose text contains any entry            |
-| `max_function_lines` | integer      | `ast`         | Penalize functions or methods whose line span exceeds this limit |
-| `max_file_lines`     | integer      | `ast`         | Penalize files whose total physical line count exceeds this limit |
+| Field                      | Type         | Used by       | Description                                                                                                                                          |
+| -------------------------- | ------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `error_penalty`            | float        | `lint`, `ast` | Penalty per error or AST match (default: 1.0)                                                                                                        |
+| `warning_penalty`          | float        | `lint`        | Penalty per warning (default: 0.5)                                                                                                                   |
+| `ast_count_type_reference` | string array | `ast`         | Tokens to count (e.g. `["TSAnyKeyword", "TSAsExpression", "TsFixMe"]`). Strings that match an oxc `AstType` variant name match node kind first; `"any"` maps to `TSAnyKeyword`; other strings match simple `TSTypeReference` identifiers (e.g. `TsFixMe`). |
+| `comment_startswith`       | string array | `ast`         | Count comments whose trimmed text starts with any entry                                                                                              |
+| `comment_contains`         | string array | `ast`         | Count comments whose text contains any entry                                                                                                         |
+| `max_function_lines`       | integer      | `ast`         | Penalize functions or methods whose line span exceeds this limit                                                                                     |
+| `max_file_lines`           | integer      | `ast`         | Penalize files whose total physical line count exceeds this limit                                                                                    |
 
 ---
 
@@ -168,16 +168,21 @@ Parses JavaScript and TypeScript files in-process with [oxc-parser](https://oxc.
 
 **Penalty per file** = `match_count × error_penalty`
 
-#### `ast_count_node` — count AST nodes by type
+#### `ast_count_type_reference` — count AST kinds or type-reference names
 
-Counts occurrences of any [AstKind](https://docs.rs/oxc_ast/latest/oxc_ast/generated/ast_kind/enum.AstKind.html) variant across all matched files.
+Each entry is either:
+
+1. **An oxc `AstType` variant name** — same identifier as in [the `AstType` enum](https://docs.rs/oxc_ast/latest/oxc_ast/enum.AstType.html) (e.g. `TSAnyKeyword`, `TSAsExpression`, `CallExpression`). Visits match node kind first ([`AstKind::ty()`](https://docs.rs/oxc_ast/latest/oxc_ast/enum.AstKind.html#method.ty)).
+2. **Any other string** — treated as a **simple** type reference name: `TSTypeReference` whose type name is a single identifier (`Foo` in `const x: Foo = 1`, not `Foo.Bar`).
+
+The legacy token `"any"` is equivalent to `TSAnyKeyword`. Multiple entries can be combined in one metric.
 
 ```toml
 [[metrics]]
 name = "no_ts_any"
 type = "ast"
 files = ["src/**/*.ts", "src/**/*.tsx"]
-ast_count_node = "TSAnyKeyword"
+ast_count_type_reference = ["TSAnyKeyword", "TsFixMe"]
 error_penalty = 5.0
 ```
 
@@ -270,11 +275,11 @@ Calculate health scores for a range of git commits.
 fiber range --from <SHA> --to <SHA> [--output report.html]
 ```
 
-| Flag       | Description                           |
-| ---------- | ------------------------------------- |
+| Flag       | Description                                                  |
+| ---------- | ------------------------------------------------------------ |
 | `--from`   | Start commit SHA (exclusive, using git `from..to` semantics) |
-| `--to`     | End commit SHA (inclusive)            |
-| `--output` | Optional path to write an HTML report |
+| `--to`     | End commit SHA (inclusive)                                   |
+| `--output` | Optional path to write an HTML report                        |
 
 Fiber will check out each commit in the git range `from..to`, run metrics, restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
 

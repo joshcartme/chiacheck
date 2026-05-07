@@ -41,7 +41,7 @@ cargo clippy
 
 ## Key Types
 
-- `MetricConfig`: `command: Option<String>`; required except for `ast`. Optional tuning: `error_penalty`, `warning_penalty`. AST fields: `files`, `ast_count_node`, `comment_startswith`, `comment_contains`, `max_function_lines`, `max_file_lines`.
+- `MetricConfig`: `command: Option<String>`; required except for `ast`. Optional tuning: `error_penalty`, `warning_penalty`. AST fields: `files`, `ast_count_type_reference`, `comment_startswith`, `comment_contains`, `max_function_lines`, `max_file_lines`.
 - `MetricResult` (`Clone+Serialize`): `name`, `total_penalty`, `attributed: Vec<(String, f64)>`, `unattributed`, `details`.
 - `PenaltyNode` (`Debug+Serialize`): file/dir tree with per-metric `penalties`; directory penalties aggregate descendants.
 - `HealthScore` (`Clone+Serialize`): `overall`, `unattributed`, `tree`, `metrics`, `commit`, `timestamp`; built by `build_health_score()`.
@@ -58,7 +58,8 @@ cargo clippy
 - `count`: finite numeric stdout; raw value is unattributed penalty.
 - `percentage`: finite numeric stdout with optional `%`; raw value is unattributed penalty.
 - `score`: finite numeric stdout; raw value is unattributed penalty.
-- `ast`: no command. Exactly one mode: `ast_count_node`, `comment_startswith`, `comment_contains`, `max_function_lines`, or `max_file_lines`.
+- `ast`: no command. Exactly one mode: `ast_count_type_reference`, `comment_startswith`, `comment_contains`, `max_function_lines`, or `max_file_lines`.
+- `ast_count_type_reference`: strings equal to an oxc `AstType` variant name match `AstKind::ty()` first; `"any"` maps to `TSAnyKeyword`; otherwise simple `TSTypeReference` identifier (not qualified).
 - `ast` parses JS/TS with oxc except `max_file_lines` (raw line counts). Modes count: AST nodes, comment matches, excess function-span lines over limit, or excess file lines over limit.
 - `error_penalty` defaults to `1.0`; `warning_penalty` defaults to `0.5` for lint.
 - `make_relative` normalizes to the working directory passed into `run_metric` / `run_all_metrics`.

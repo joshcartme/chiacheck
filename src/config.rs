@@ -15,7 +15,7 @@ pub struct MetricConfig {
     pub error_penalty: Option<f64>,
     pub warning_penalty: Option<f64>,
     pub files: Option<Vec<String>>,
-    pub ast_count_node: Option<String>,
+    pub ast_count_type_reference: Option<Vec<String>>,
     pub comment_startswith: Option<Vec<String>>,
     pub comment_contains: Option<Vec<String>>,
     pub max_function_lines: Option<usize>,

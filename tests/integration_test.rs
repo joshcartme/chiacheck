@@ -16,7 +16,7 @@ fn metric_config(name: &str, metric_type: &str, command: Option<&str>) -> Metric
         error_penalty: None,
         warning_penalty: None,
         files: None,
-        ast_count_node: None,
+        ast_count_type_reference: None,
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: None,
@@ -491,7 +491,7 @@ fn test_cli_history_days_conflicts_with_date_range() {
 // --- ast metric type ----------------------------------------------------------
 
 #[test]
-fn test_ast_count_node_ts_any() {
+fn test_ast_count_type_reference_any() {
     use fiber::config::MetricConfig;
     use tempfile::tempdir;
 
@@ -509,7 +509,7 @@ fn test_ast_count_node_ts_any() {
         error_penalty: Some(10.0),
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: Some("TSAnyKeyword".to_string()),
+        ast_count_type_reference: Some(vec!["any".to_string()]),
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: None,
@@ -546,7 +546,7 @@ fn test_ast_comment_startswith() {
         error_penalty: Some(1.0),
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: None,
+        ast_count_type_reference: None,
         comment_startswith: Some(vec!["eslint-disable".to_string()]),
         comment_contains: None,
         max_function_lines: None,
@@ -582,7 +582,7 @@ fn test_ast_comment_contains() {
         error_penalty: Some(1.0),
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: None,
+        ast_count_type_reference: None,
         comment_startswith: None,
         comment_contains: Some(vec!["TODO".to_string(), "FIXME".to_string()]),
         max_function_lines: None,
@@ -618,7 +618,7 @@ fn test_ast_max_function_lines_counts_functions_and_methods() {
         error_penalty: Some(1.0),
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: None,
+        ast_count_type_reference: None,
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: Some(3),
@@ -655,7 +655,7 @@ fn test_ast_max_function_lines_counts_concise_arrow_functions() {
         error_penalty: Some(1.0),
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: None,
+        ast_count_type_reference: None,
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: Some(2),
@@ -688,7 +688,7 @@ fn test_ast_max_file_lines_penalizes_excess_lines() {
         error_penalty: Some(1.0),
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: None,
+        ast_count_type_reference: None,
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: None,
@@ -725,7 +725,7 @@ fn test_ast_multiple_sub_features_is_error() {
         error_penalty: None,
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: Some("CallExpression".to_string()),
+        ast_count_type_reference: Some(vec!["SomeType".to_string()]),
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: Some(10),
@@ -754,7 +754,7 @@ fn test_ast_no_files_match_is_error() {
         error_penalty: None,
         warning_penalty: None,
         files: Some(vec!["nonexistent/**/*.ts".to_string()]),
-        ast_count_node: Some("TSAnyKeyword".to_string()),
+        ast_count_type_reference: Some(vec!["any".to_string()]),
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: None,
@@ -784,7 +784,7 @@ fn test_ast_missing_sub_feature_is_error() {
         error_penalty: None,
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: None,
+        ast_count_type_reference: None,
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: None,
@@ -813,7 +813,7 @@ fn test_lint_text_fallback() {
         error_penalty: None,
         warning_penalty: None,
         files: None,
-        ast_count_node: None,
+        ast_count_type_reference: None,
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: None,
@@ -835,25 +835,29 @@ fn test_lint_text_fallback() {
     );
 }
 
-// --- ast CallExpression count -------------------------------------------------
+// --- ast_count_type_reference by named type ----------------------------------
 
 #[test]
-fn test_ast_count_node_call_expression() {
+fn test_ast_count_type_reference_named_type() {
     use fiber::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
-    // 3 CallExpression nodes
-    std::fs::write(dir.path().join("calls.ts"), "foo(); bar(); baz();\n").unwrap();
+    // 2 TSTypeReference nodes for TsFixMe, 1 for string
+    std::fs::write(
+        dir.path().join("refs.ts"),
+        "const a: TsFixMe = 1;\nconst b: TsFixMe = 2;\nconst c: string = 'ok';\n",
+    )
+    .unwrap();
 
     let config = MetricConfig {
-        name: "calls".to_string(),
+        name: "no_fixme_type".to_string(),
         metric_type: "ast".to_string(),
         command: None,
         error_penalty: Some(1.0),
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: Some("CallExpression".to_string()),
+        ast_count_type_reference: Some(vec!["TsFixMe".to_string()]),
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: None,
@@ -861,18 +865,89 @@ fn test_ast_count_node_call_expression() {
     };
     let result = run_metric(&config, dir.path());
     assert!(
-        (result.total_penalty - 3.0).abs() < 0.01,
-        "Expected 3.0, got {} (details: {})",
+        (result.total_penalty - 2.0).abs() < 0.01,
+        "Expected 2.0, got {} (details: {})",
         result.total_penalty,
         result.details
     );
     assert_eq!(result.attributed.len(), 1);
+    assert!(result.details.contains("2 matches"));
 }
 
-// --- ast unknown node name yields zero, no Error in details -------------------
+#[test]
+fn test_ast_count_type_reference_ts_as_expression() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("cast.ts"),
+        "const x = 1 as number;\nconst y = 'ok' as const;\n",
+    )
+    .unwrap();
+
+    let config = MetricConfig {
+        name: "as_expr".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_type_reference: Some(vec!["TSAsExpression".to_string()]),
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert!(
+        (result.total_penalty - 2.0).abs() < 0.01,
+        "Expected 2.0, got {} (details: {})",
+        result.total_penalty,
+        result.details
+    );
+    assert!(result.details.contains("2 matches"));
+}
 
 #[test]
-fn test_ast_count_node_unknown_yields_zero() {
+fn test_ast_count_type_reference_ast_kind_and_identifier() {
+    use fiber::config::MetricConfig;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("mix.ts"),
+        "const a: TsFixMe = 1;\nconst b = 2 as number;\n",
+    )
+    .unwrap();
+
+    let config = MetricConfig {
+        name: "mixed".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec!["*.ts".to_string()]),
+        ast_count_type_reference: Some(vec!["TSAsExpression".to_string(), "TsFixMe".to_string()]),
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
+    };
+    let result = run_metric(&config, dir.path());
+    assert!(
+        (result.total_penalty - 2.0).abs() < 0.01,
+        "Expected 2.0, got {} (details: {})",
+        result.total_penalty,
+        result.details
+    );
+    assert!(result.details.contains("2 matches"));
+}
+
+// --- ast_count_type_reference unknown name yields zero, no Error in details ---
+
+#[test]
+fn test_ast_count_type_reference_unknown_yields_zero() {
     use fiber::config::MetricConfig;
     use tempfile::tempdir;
 
@@ -880,13 +955,13 @@ fn test_ast_count_node_unknown_yields_zero() {
     std::fs::write(dir.path().join("x.ts"), "const a = 1;\n").unwrap();
 
     let config = MetricConfig {
-        name: "unknown_node".to_string(),
+        name: "unknown_type".to_string(),
         metric_type: "ast".to_string(),
         command: None,
         error_penalty: Some(1.0),
         warning_penalty: None,
         files: Some(vec!["*.ts".to_string()]),
-        ast_count_node: Some("ThisNodeDoesNotExistInOxc9999".to_string()),
+        ast_count_type_reference: Some(vec!["TypeThatNeverAppears9999".to_string()]),
         comment_startswith: None,
         comment_contains: None,
         max_function_lines: None,
