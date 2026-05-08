@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 pub fn run() -> Result<()> {
     let repo_root = git_toplevel().context("not a git repository")?;
@@ -74,12 +74,16 @@ fn git_toplevel() -> Result<PathBuf> {
     Ok(PathBuf::from(s))
 }
 
-fn git_show_optional(repo: &Path, rev: &str) -> Option<String> {
-    let out = Command::new("git")
+fn git_show_output(repo: &Path, rev: &str) -> Result<Output> {
+    Command::new("git")
         .current_dir(repo)
         .args(["show", rev])
         .output()
-        .ok()?;
+        .context("failed to spawn `git`")
+}
+
+fn git_show_optional(repo: &Path, rev: &str) -> Option<String> {
+    let out = git_show_output(repo, rev).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -87,11 +91,7 @@ fn git_show_optional(repo: &Path, rev: &str) -> Option<String> {
 }
 
 fn git_show(repo: &Path, rev: &str) -> Result<String> {
-    let out = Command::new("git")
-        .current_dir(repo)
-        .args(["show", rev])
-        .output()
-        .context("failed to spawn `git`")?;
+    let out = git_show_output(repo, rev)?;
     if !out.status.success() {
         anyhow::bail!(
             "git show {} failed: {}",
