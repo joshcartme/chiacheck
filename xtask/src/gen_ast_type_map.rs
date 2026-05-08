@@ -1,37 +1,19 @@
 //! Generate `fiber/src/metrics/ast_type_map.rs` from `oxc_ast`'s generated `ast_kind.rs`.
 
 use anyhow::{Context, Result};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{Metadata, MetadataCommand, Package};
 use regex::Regex;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn run() -> Result<()> {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .context("xtask crate must live under workspace root")?;
-
-    let metadata = MetadataCommand::new()
-        .manifest_path(workspace_root.join("Cargo.toml"))
-        .exec()
-        .context("cargo metadata failed")?;
-
-    let pkg = metadata
-        .packages
-        .iter()
-        .find(|p| p.name.as_str() == "oxc_ast")
-        .context("package `oxc_ast` not found in cargo metadata")?;
-
-    let version = pkg.version.to_string();
-    let crate_root = pkg
-        .manifest_path
-        .parent()
-        .context("oxc_ast manifest_path has no parent")?;
+    let workspace_root = workspace_root()?;
+    let (version, crate_root) = resolve_oxc_ast_sources(&workspace_root)?;
 
     let ast_kind_path = crate_root.join("src/generated/ast_kind.rs");
     let src = fs::read_to_string(&ast_kind_path)
-        .with_context(|| format!("failed to read {}", ast_kind_path.as_str()))?;
+        .with_context(|| format!("failed to read {}", ast_kind_path.display()))?;
 
     let ast_type_max = parse_ast_type_max(&src)?;
     let variants = parse_ast_type_variants(&src)?;
@@ -61,6 +43,41 @@ pub fn run() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn workspace_root() -> Result<PathBuf> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .context("xtask crate must live under workspace root")
+        .map(Path::to_path_buf)
+}
+
+fn workspace_metadata(workspace_root: &Path) -> Result<Metadata> {
+    MetadataCommand::new()
+        .manifest_path(workspace_root.join("Cargo.toml"))
+        .exec()
+        .context("cargo metadata failed")
+}
+
+fn oxc_ast_package(metadata: &Metadata) -> Result<&Package> {
+    metadata
+        .packages
+        .iter()
+        .find(|p| p.name.as_str() == "oxc_ast")
+        .context("package `oxc_ast` not found in cargo metadata")
+}
+
+/// Resolved `oxc_ast` version and crate root from workspace `cargo metadata` (same source as [`run`]).
+fn resolve_oxc_ast_sources(workspace_root: &Path) -> Result<(String, PathBuf)> {
+    let metadata = workspace_metadata(workspace_root)?;
+    let pkg = oxc_ast_package(&metadata)?;
+    let crate_root = pkg
+        .manifest_path
+        .parent()
+        .context("oxc_ast manifest_path has no parent")?
+        .as_std_path()
+        .to_path_buf();
+    Ok((pkg.version.to_string(), crate_root))
 }
 
 fn parse_ast_type_max(src: &str) -> Result<u8> {
@@ -160,4 +177,92 @@ fn run_rustfmt(path: &Path) -> Result<()> {
         anyhow::bail!("rustfmt exited with {}", status);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ast_type_max_finds_const() {
+        let src = r"
+/// docs
+pub const AST_TYPE_MAX: u8 = 187;
+";
+        assert_eq!(parse_ast_type_max(src).unwrap(), 187);
+    }
+
+    #[test]
+    fn parse_ast_type_max_errors_when_missing() {
+        assert!(parse_ast_type_max("pub enum AstType { X = 0 }").is_err());
+    }
+
+    #[test]
+    fn parse_ast_type_variants_extracts_discriminants() {
+        let src = r#"
+#[repr(u8)]
+pub enum AstType {
+    Program = 0,
+
+    NullLiteral = 95, // trailing comment
+    TSAnyKeyword = 187,
+}
+"#;
+        let got = parse_ast_type_variants(src).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("Program".to_string(), 0),
+                ("NullLiteral".to_string(), 95),
+                ("TSAnyKeyword".to_string(), 187),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_ast_type_variants_errors_without_enum() {
+        assert!(parse_ast_type_variants("pub const AST_TYPE_MAX: u8 = 1;").is_err());
+    }
+
+    #[test]
+    fn parse_ast_type_variants_errors_when_no_variants() {
+        let src = r"
+pub enum AstType {
+}
+";
+        assert!(parse_ast_type_variants(src).is_err());
+    }
+
+    #[test]
+    fn ast_type_max_matches_variant_count_plus_one() {
+        let src = r"
+pub const AST_TYPE_MAX: u8 = 2;
+
+pub enum AstType {
+    A = 0,
+    B = 1,
+    C = 2,
+}
+";
+        let max = parse_ast_type_max(src).unwrap();
+        let variants = parse_ast_type_variants(src).unwrap();
+        assert_eq!(variants.len(), max as usize + 1);
+    }
+
+    #[test]
+    fn generate_file_contents_includes_version_and_match_arms() {
+        let workspace_root = workspace_root().expect("xtask lives under workspace root");
+        let (resolved_version, _) =
+            resolve_oxc_ast_sources(&workspace_root).expect("cargo metadata resolves oxc_ast");
+
+        let variants = vec![("Program".to_string(), 0), ("NullLiteral".to_string(), 95)];
+        let out = generate_file_contents(&resolved_version, &variants);
+        assert!(
+            out.contains(&format!("from oxc_ast {resolved_version}.")),
+            "banner should mention resolved semver"
+        );
+        assert!(out.contains("\"Program\" => Some(AstType::Program),"));
+        assert!(out.contains("\"NullLiteral\" => Some(AstType::NullLiteral),"));
+        assert!(out.contains("_ => None,"));
+    }
 }
