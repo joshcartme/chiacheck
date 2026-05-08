@@ -5,7 +5,7 @@ use fiber::cli::{Cli, Commands};
 use fiber::config::load_config;
 use fiber::git::CommitInfo;
 use fiber::metrics::runner::run_all_metrics;
-use fiber::scorer::{build_health_score, HealthScore};
+use fiber::scorer::{HealthScore, build_health_score};
 use fiber::{git, report};
 
 fn print_score(score: &HealthScore) {

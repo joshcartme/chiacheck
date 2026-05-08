@@ -1,9 +1,9 @@
 use chrono::Utc;
 use clap::Parser;
 use fiber::cli::Cli;
-use fiber::config::{load_config, MetricConfig};
-use fiber::metrics::runner::{run_all_metrics, run_metric};
+use fiber::config::{MetricConfig, load_config};
 use fiber::metrics::MetricResult;
+use fiber::metrics::runner::{run_all_metrics, run_metric};
 use fiber::scorer::build_health_score;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -461,30 +461,34 @@ fn test_get_commits_in_date_range_no_duplicate_nonempty() {
 #[test]
 fn test_cli_history_requires_from_and_to_together() {
     assert!(Cli::try_parse_from(["fiber", "history", "--from", "2024-01-01"]).is_err());
-    assert!(Cli::try_parse_from([
-        "fiber",
-        "history",
-        "--from",
-        "2024-01-01",
-        "--to",
-        "2024-02-01"
-    ])
-    .is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "fiber",
+            "history",
+            "--from",
+            "2024-01-01",
+            "--to",
+            "2024-02-01"
+        ])
+        .is_ok()
+    );
 }
 
 #[test]
 fn test_cli_history_days_conflicts_with_date_range() {
-    assert!(Cli::try_parse_from([
-        "fiber",
-        "history",
-        "--days",
-        "30",
-        "--from",
-        "2024-01-01",
-        "--to",
-        "2024-02-01"
-    ])
-    .is_err());
+    assert!(
+        Cli::try_parse_from([
+            "fiber",
+            "history",
+            "--days",
+            "30",
+            "--from",
+            "2024-01-01",
+            "--to",
+            "2024-02-01"
+        ])
+        .is_err()
+    );
     assert!(Cli::try_parse_from(["fiber", "history", "--days", "30"]).is_ok());
 }
 
