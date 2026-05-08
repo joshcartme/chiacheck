@@ -6,7 +6,7 @@ Fiber is a Rust CLI that scores frontend project health with configurable metric
 
 - Rust 2024. Prefer existing modules and patterns.
 - Preserve user edits. Do not revert unrelated changes.
-- Always run `cargo fmt` and `cargo clippy` after making changes.
+- Always run `cargo fmt` and `cargo clippy --all-targets` after making changes.
 - After substantive Rust edits, run focused tests or `cargo test` and update/add new tests.
 
 ## Commands
@@ -15,7 +15,7 @@ Fiber is a Rust CLI that scores frontend project health with configurable metric
 cargo build
 cargo test
 cargo fmt
-cargo clippy
+cargo clippy --all-targets
 ```
 
 ## Crates
@@ -40,11 +40,4 @@ To block commits that bump `oxc_ast` without regenerating the map, install:
 ```bash
 printf '%s\n' '#!/usr/bin/env bash' 'exec cargo xtask check-oxc-version' > .git/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
-```
-
-Or manually create `.git/hooks/pre-commit` containing:
-
-```bash
-#!/usr/bin/env bash
-exec cargo xtask check-oxc-version
 ```
