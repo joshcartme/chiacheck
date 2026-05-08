@@ -7,7 +7,7 @@ Fiber is a Rust CLI that scores frontend project health with configurable metric
 - Rust 2024. Prefer existing modules and patterns.
 - Preserve user edits. Do not revert unrelated changes.
 - Always run `cargo fmt` and `cargo clippy` after making changes.
-- After substantive Rust edits, run focused tests or `cargo test`.
+- After substantive Rust edits, run focused tests or `cargo test` and update/add new tests.
 
 ## Commands
 

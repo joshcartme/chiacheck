@@ -1,7 +1,7 @@
 use crate::config::MetricConfig;
 use crate::metrics::MetricResult;
+use crate::metrics::ast_type_map::ast_type_from_str;
 use oxc_allocator::Allocator;
-use oxc_ast::ast_kind::AST_TYPE_MAX;
 use oxc_ast::{AstKind, AstType};
 use oxc_ast_visit::Visit;
 use oxc_parser::{ParseOptions, Parser};
@@ -391,31 +391,12 @@ fn resolve_files(patterns: &[String], working_directory: &Path) -> Result<Vec<Pa
     Ok(paths)
 }
 
-/// Resolves a token to [`AstType`] when it equals that variant's [`Debug`] output (the enum
-/// variant spelling used by oxc, e.g. `TSAnyKeyword`, `TSAsExpression`).
-///
-/// # Safety
-///
-/// [`AstType`] is `#[repr(u8)]` with contiguous discriminants `0..=AST_TYPE_MAX`.
-fn ast_type_from_kind_token(name: &str) -> Option<AstType> {
-    (0..=AST_TYPE_MAX).find_map(|byte| {
-        // SAFETY: Every discriminant in `0..=AST_TYPE_MAX` corresponds to exactly one `AstType`
-        // variant (`AstType` defines variants through byte 187 with no holes).
-        let ty = unsafe { std::mem::transmute::<u8, AstType>(byte) };
-        if format!("{ty:?}") == name {
-            Some(ty)
-        } else {
-            None
-        }
-    })
-}
-
 /// Counts AST nodes for [`ast_count_type_reference`](crate::config::MetricConfig::ast_count_type_reference).
 ///
 /// Each entry is classified once when the counter is built:
 ///
-/// - If it equals an oxc [`AstType`] variant name (same spelling as in Rust / `Debug`, e.g.
-///   `TSAnyKeyword`), visits match [`AstKind::ty()`] first.
+/// - If it resolves via [`ast_type_from_str`] (oxc `AstType` variant name, e.g. `TSAnyKeyword`,
+///   `TSAsExpression`), visits match [`AstKind::ty()`] first.
 /// - The legacy token `"any"` is treated as [`AstType::TSAnyKeyword`].
 /// - Otherwise the token names a [`TSTypeReference`] identifier (simple identifier `Foo`, not
 ///   `Foo.Bar`).
@@ -434,7 +415,7 @@ impl AstTypeReferenceCounter {
                 ast_types.insert(AstType::TSAnyKeyword);
                 continue;
             }
-            if let Some(ty) = ast_type_from_kind_token(&t) {
+            if let Some(ty) = ast_type_from_str(&t) {
                 ast_types.insert(ty);
             } else {
                 identifier_targets.insert(t);
