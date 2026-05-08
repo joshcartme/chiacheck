@@ -416,14 +416,11 @@ fn test_failing_command_surfaces_error() {
 #[test]
 fn test_get_commits_in_range_no_duplicate() {
     let result = fiber::git::get_commits_in_range("HEAD", "HEAD");
-    match result {
-        Ok(commits) => assert!(
-            commits.is_empty(),
-            "A..A should yield no commits, got: {:?}",
-            commits
-        ),
-        Err(_) => {}
-    }
+    if let Ok(commits) = result { assert!(
+        commits.is_empty(),
+        "A..A should yield no commits, got: {:?}",
+        commits
+    ) }
 }
 
 #[test]
