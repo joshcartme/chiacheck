@@ -4,3 +4,6 @@ members = [
     "fiber",
     "xtask",
 ]
+
+[workspace.dependencies]
+oxc_ast = "0.127"

@@ -16,6 +16,15 @@ cargo build --release
 
 ---
 
+## Development (workspace)
+
+This repo is a Cargo **workspace** (`fiber` + `xtask`). Developer automation uses **`cargo xtask`** ([cargo-xtask](https://github.com/matklad/cargo-xtask)):
+
+- **`cargo xtask gen-ast-type-map`** — Regenerate `fiber/src/metrics/ast_type_map.rs` after changing the workspace-pinned `oxc_ast` version in the root `Cargo.toml`.
+- **`cargo xtask check-oxc-version`** — Pre-commit helper: fails if staged root `Cargo.toml` changes `workspace.dependencies.oxc_ast` without you addressing the map (see workspace `AGENTS.md` for hook setup).
+
+---
+
 ## Quick Start
 
 1. Copy the example config and customise it:

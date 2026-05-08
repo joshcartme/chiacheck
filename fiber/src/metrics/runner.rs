@@ -212,15 +212,16 @@ fn build_source_cache(configs: &[MetricConfig], working_directory: &Path) -> Sou
             continue;
         }
         if let Some(patterns) = &config.files
-            && let Ok(paths) = resolve_files(patterns, working_directory) {
-                for path in paths {
-                    cache.entry(path.clone()).or_insert_with(|| {
-                        std::fs::read_to_string(&path)
-                            .map(Arc::new)
-                            .map_err(|e| format!("Cannot read {}: {}", path.display(), e))
-                    });
-                }
+            && let Ok(paths) = resolve_files(patterns, working_directory)
+        {
+            for path in paths {
+                cache.entry(path.clone()).or_insert_with(|| {
+                    std::fs::read_to_string(&path)
+                        .map(Arc::new)
+                        .map_err(|e| format!("Cannot read {}: {}", path.display(), e))
+                });
             }
+        }
     }
     cache
 }
@@ -328,10 +329,11 @@ fn run_coverage(command: &str, working_directory: &Path) -> RunResult {
             ));
         }
         if let Some(total) = coverage.get("total")
-            && let Some(ref lines) = total.lines {
-                let penalty = coverage_penalty(lines.pct)?;
-                return Ok((Vec::new(), penalty, format!("{:.1}% coverage", lines.pct)));
-            }
+            && let Some(ref lines) = total.lines
+        {
+            let penalty = coverage_penalty(lines.pct)?;
+            return Ok((Vec::new(), penalty, format!("{:.1}% coverage", lines.pct)));
+        }
     }
 
     // Fallback: raw numeric percentage
@@ -455,9 +457,10 @@ impl<'a> Visit<'a> for AstTypeReferenceCounter {
         }
         if let AstKind::TSTypeReference(r) = kind
             && let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &r.type_name
-                && self.identifier_targets.contains(id.name.as_str()) {
-                    self.count += 1;
-                }
+            && self.identifier_targets.contains(id.name.as_str())
+        {
+            self.count += 1;
+        }
     }
 }
 

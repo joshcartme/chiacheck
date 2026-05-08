@@ -18,6 +18,7 @@ Fiber workspace specific guidance. Keep this file terse and agent-focused; targe
 - `src/error.rs`: `FiberError`.
 - `src/git.rs`: git wrappers plus commit/date range traversal.
 - `src/metrics/mod.rs`: `MetricResult`.
+- `src/metrics/ast_type_map.rs`: generated `AstType` string map (`cargo xtask gen-ast-type-map`); see workspace root `AGENTS.md`.
 - `src/metrics/runner.rs`: metric execution and parsing.
 - `src/scorer.rs`: penalty tree and `HealthScore`.
 - `src/report.rs`: HTML report generation and escaping.
