@@ -36,7 +36,7 @@ command = "scripts/my-penalty.sh"
 name = "no_ts_any"
 type = "ast"
 files = ["src/**/*.ts", "src/**/*.tsx"]
-ast_count_node = "TSAnyKeyword"
+ast_count_type_reference = ["TSAnyKeyword", "TsFixMe"]
 error_penalty = 5.0
 
 [[metrics]]

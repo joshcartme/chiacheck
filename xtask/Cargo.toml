@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+cargo_metadata = "0.22"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+toml = "0.8"
