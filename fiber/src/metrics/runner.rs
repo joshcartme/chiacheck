@@ -1,4 +1,4 @@
-use crate::config::MetricConfig;
+use crate::config::{AstFeature, MetricConfig};
 use crate::metrics::MetricResult;
 use crate::metrics::ast_type_map::ast_type_from_str;
 use oxc_allocator::Allocator;
@@ -552,56 +552,6 @@ impl<'a> Visit<'a> for AstFunctionLengthCounter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// AstFeature — typed representation of a single AST metric's configuration
-// ---------------------------------------------------------------------------
-
-/// Typed, validated representation of exactly one AST metric feature.
-/// Created by [`parse_ast_feature`]; used by [`run_ast`].
-enum AstFeature {
-    TypeCounter(Vec<String>),
-    FunctionLength(usize),
-    CommentStartsWith(Vec<String>),
-    CommentContains(Vec<String>),
-    FileLines(usize),
-}
-
-/// Parse and validate the AST feature specified in `config`, returning an error
-/// if zero or more than one feature is configured.
-fn parse_ast_feature(config: &MetricConfig) -> Result<AstFeature, String> {
-    let features: Vec<AstFeature> = [
-        config
-            .ast_count_type_reference
-            .as_ref()
-            .map(|v| AstFeature::TypeCounter(v.clone())),
-        config
-            .comment_startswith
-            .as_ref()
-            .map(|v| AstFeature::CommentStartsWith(v.clone())),
-        config
-            .comment_contains
-            .as_ref()
-            .map(|v| AstFeature::CommentContains(v.clone())),
-        config.max_function_lines.map(AstFeature::FunctionLength),
-        config.max_file_lines.map(AstFeature::FileLines),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    match features.len() {
-        0 => Err(
-            "ast metric requires exactly one of: ast_count_type_reference, comment_startswith, comment_contains, max_function_lines, max_file_lines"
-                .to_string(),
-        ),
-        1 => Ok(features.into_iter().next().unwrap()),
-        _ => Err(
-            "ast metric allows only one of: ast_count_type_reference, comment_startswith, comment_contains, max_function_lines, max_file_lines"
-                .to_string(),
-        ),
-    }
-}
-
 fn run_ast(
     config: &MetricConfig,
     working_directory: &Path,
@@ -609,7 +559,7 @@ fn run_ast(
 ) -> RunResult {
     use rayon::prelude::*;
 
-    let feature = parse_ast_feature(config)?;
+    let feature = config.parse_ast_feature()?;
 
     let patterns = config
         .files
