@@ -1129,3 +1129,168 @@ fn test_run_all_metrics_order_preserved() {
     assert_close(results[1].total_penalty, 2.0);
     assert_close(results[2].total_penalty, 3.0);
 }
+
+// --- run_ast_metrics_batch: shared parse correctness -------------------------
+
+/// Two AST metrics targeting the same file via `run_all_metrics` must each produce
+/// the same result as `run_metric` called individually.
+#[test]
+fn test_ast_metrics_shared_parse_same_file_correctness() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+        const x: any = 1;
+        // eslint-disable-next-line
+        function long() {
+            const a = 1;
+            const b = 2;
+            const c = 3;
+            const d = 4;
+            const e = 5;
+        }
+    "#;
+    write_temp_source(&dir, "file.ts", source);
+
+    let glob = format!("{}/*.ts", dir.path().display());
+
+    let cfg_any = MetricConfig {
+        name: "any_count".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec![glob.clone()]),
+        ast_count_type_reference: Some(vec!["any".to_string()]),
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
+    };
+
+    let cfg_fn = MetricConfig {
+        name: "fn_length".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec![glob.clone()]),
+        ast_count_type_reference: None,
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: Some(3),
+        max_file_lines: None,
+    };
+
+    let cfg_comment = MetricConfig {
+        name: "eslint_disable".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec![glob.clone()]),
+        ast_count_type_reference: None,
+        comment_startswith: Some(vec!["eslint-disable".to_string()]),
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
+    };
+
+    // Individual results as ground truth.
+    let single_any = run_metric(&cfg_any, dir.path());
+    let single_fn = run_metric(&cfg_fn, dir.path());
+    let single_comment = run_metric(&cfg_comment, dir.path());
+
+    // Batch result via run_all_metrics (exercises run_ast_metrics_batch).
+    let batch = run_all_metrics(&[cfg_any, cfg_fn, cfg_comment], dir.path());
+
+    assert_eq!(batch.len(), 3);
+    assert_eq!(batch[0].name, "any_count");
+    assert_eq!(batch[1].name, "fn_length");
+    assert_eq!(batch[2].name, "eslint_disable");
+
+    assert_close(batch[0].total_penalty, single_any.total_penalty);
+    assert_close(batch[1].total_penalty, single_fn.total_penalty);
+    assert_close(batch[2].total_penalty, single_comment.total_penalty);
+
+    assert_eq!(batch[0].attributed.len(), single_any.attributed.len());
+    assert_eq!(batch[1].attributed.len(), single_fn.attributed.len());
+    assert_eq!(batch[2].attributed.len(), single_comment.attributed.len());
+}
+
+/// Two AST metrics targeting different, non-overlapping files must not contaminate each other.
+#[test]
+fn test_ast_metrics_disjoint_files_no_contamination() {
+    let dir = tempfile::tempdir().unwrap();
+    write_temp_source(&dir, "a.ts", "const x: any = 1;");
+    write_temp_source(&dir, "b.ts", "const y: string = 'hello';");
+
+    let cfg_a = MetricConfig {
+        name: "any_in_a".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec![format!("{}/a.ts", dir.path().display())]),
+        ast_count_type_reference: Some(vec!["any".to_string()]),
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
+    };
+
+    let cfg_b = MetricConfig {
+        name: "any_in_b".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec![format!("{}/b.ts", dir.path().display())]),
+        ast_count_type_reference: Some(vec!["any".to_string()]),
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
+    };
+
+    let batch = run_all_metrics(&[cfg_a, cfg_b], dir.path());
+
+    assert_eq!(batch.len(), 2);
+    // a.ts has `any`; b.ts does not.
+    assert_close(batch[0].total_penalty, 1.0);
+    assert_close(batch[1].total_penalty, 0.0);
+    assert_eq!(batch[0].attributed.len(), 1);
+    assert_eq!(batch[1].attributed.len(), 0);
+}
+
+/// run_all_metrics must preserve declared order when mixing AST and non-AST metrics.
+#[test]
+fn test_run_all_metrics_mixed_ast_non_ast_order() {
+    let dir = tempfile::tempdir().unwrap();
+    write_temp_source(&dir, "f.ts", "const x: any = 1;");
+
+    let glob = format!("{}/f.ts", dir.path().display());
+
+    let cfg_count = metric_config("count_metric", "count", Some("echo 5"));
+    let cfg_ast = MetricConfig {
+        name: "ast_metric".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(1.0),
+        warning_penalty: None,
+        files: Some(vec![glob]),
+        ast_count_type_reference: Some(vec!["any".to_string()]),
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
+    };
+    let cfg_count2 = metric_config("count_metric2", "count", Some("echo 3"));
+
+    let results = run_all_metrics(&[cfg_count, cfg_ast, cfg_count2], dir.path());
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].name, "count_metric");
+    assert_eq!(results[1].name, "ast_metric");
+    assert_eq!(results[2].name, "count_metric2");
+    assert_close(results[0].total_penalty, 5.0);
+    assert_close(results[1].total_penalty, 1.0);
+    assert_close(results[2].total_penalty, 3.0);
+}
