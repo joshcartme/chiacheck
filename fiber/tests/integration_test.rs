@@ -1130,6 +1130,45 @@ fn test_run_all_metrics_order_preserved() {
     assert_close(results[2].total_penalty, 3.0);
 }
 
+/// A single AST metric scanning many files in parallel must aggregate
+/// correctly: total penalty, per-file attributed entries, and details string.
+#[test]
+fn test_run_ast_multi_file_parallel_aggregation() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..20 {
+        let source = format!("const x{i}: any = {i};\n");
+        write_temp_source(&dir, &format!("f{i}.ts"), &source);
+    }
+    // One file with no `any` to verify it contributes zero.
+    write_temp_source(&dir, "clean.ts", "const z: string = 'ok';\n");
+
+    let glob = format!("{}/*.ts", dir.path().display());
+
+    let cfg = MetricConfig {
+        name: "any_count".to_string(),
+        metric_type: "ast".to_string(),
+        command: None,
+        error_penalty: Some(2.0),
+        warning_penalty: None,
+        files: Some(vec![glob]),
+        ast_count_type_reference: Some(vec!["any".to_string()]),
+        comment_startswith: None,
+        comment_contains: None,
+        max_function_lines: None,
+        max_file_lines: None,
+    };
+
+    let result = run_metric(&cfg, dir.path());
+    // 20 files with `any`, 1 without.
+    assert_eq!(result.attributed.len(), 20);
+    assert_close(result.total_penalty, 20.0 * 2.0);
+    assert!(result.details.contains("20 matches across 21 files"));
+    // Every attributed entry has the expected penalty.
+    for (_, penalty) in &result.attributed {
+        assert_close(*penalty, 2.0);
+    }
+}
+
 // --- run_all_metrics: multiple AST metrics -----------------------------------
 
 /// Two AST metrics targeting the same file via `run_all_metrics` must each produce
@@ -1261,7 +1300,6 @@ fn test_ast_metrics_disjoint_files_no_contamination() {
     assert_eq!(batch[1].attributed.len(), 0);
 }
 
-/// run_all_metrics must preserve declared order when mixing AST and non-AST metrics.
 #[test]
 fn test_run_all_metrics_mixed_ast_non_ast_order() {
     let dir = tempfile::tempdir().unwrap();

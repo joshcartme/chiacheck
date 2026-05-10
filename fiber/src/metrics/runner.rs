@@ -607,6 +607,8 @@ fn run_ast(
     working_directory: &Path,
     source_cache: Option<&SourceCache>,
 ) -> RunResult {
+    use rayon::prelude::*;
+
     let feature = parse_ast_feature(config)?;
 
     let patterns = config
@@ -616,6 +618,111 @@ fn run_ast(
         .ok_or_else(|| "ast metric requires `files` to be set and non-empty".to_string())?;
     let file_paths = resolve_files(patterns, working_directory)?;
     let error_penalty = config.error_penalty.unwrap_or(1.0);
+
+    struct FileResult {
+        attributed: Vec<(String, f64)>,
+        count: usize,
+        long_functions: usize,
+        excess_function_lines: usize,
+        long_files: usize,
+        excess_file_lines: usize,
+    }
+
+    let file_results: Vec<Result<FileResult, String>> = file_paths
+        .par_iter()
+        .map(|path| {
+            let source_text: Arc<String> = match source_cache.and_then(|c| c.get(path)) {
+                Some(Ok(s)) => Arc::clone(s),
+                Some(Err(e)) => return Err(e.clone()),
+                None => Arc::new(
+                    std::fs::read_to_string(path)
+                        .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?,
+                ),
+            };
+
+            let mut fr = FileResult {
+                attributed: Vec::new(),
+                count: 0,
+                long_functions: 0,
+                excess_function_lines: 0,
+                long_files: 0,
+                excess_file_lines: 0,
+            };
+
+            if let AstFeature::FileLines(max_file_lines) = &feature {
+                let line_index = SourceLineIndex::new(source_text.as_str());
+                let excess_lines = line_index.file_line_count().saturating_sub(*max_file_lines);
+                fr.excess_file_lines = excess_lines;
+                if excess_lines > 0 {
+                    fr.long_files = 1;
+                    let rel = make_relative(path, working_directory);
+                    fr.attributed
+                        .push((rel, excess_lines as f64 * error_penalty));
+                }
+                return Ok(fr);
+            }
+
+            let allocator = Allocator::default();
+            let source_type = SourceType::from_path(path).unwrap_or_default();
+            let ret = Parser::new(&allocator, &source_text, source_type)
+                .with_options(ParseOptions {
+                    parse_regular_expression: true,
+                    ..ParseOptions::default()
+                })
+                .parse();
+
+            if let AstFeature::FunctionLength(max_function_lines) = &feature {
+                let mut counter =
+                    AstFunctionLengthCounter::new(source_text.as_str(), *max_function_lines);
+                counter.visit_program(&ret.program);
+                fr.long_functions = counter.long_function_count;
+                fr.excess_function_lines = counter.excess_lines;
+                if counter.excess_lines > 0 {
+                    let rel = make_relative(path, working_directory);
+                    fr.attributed
+                        .push((rel, counter.excess_lines as f64 * error_penalty));
+                }
+                return Ok(fr);
+            }
+
+            let file_count = match &feature {
+                AstFeature::TypeCounter(targets) => {
+                    let mut counter = AstTypeReferenceCounter::new(targets.clone());
+                    counter.visit_program(&ret.program);
+                    counter.count
+                }
+                AstFeature::CommentStartsWith(needles) => ret
+                    .program
+                    .comments
+                    .iter()
+                    .filter(|comment| {
+                        let value = comment.content_span().source_text(&source_text);
+                        let trimmed = value.trim_start();
+                        needles.iter().any(|p| trimmed.starts_with(p.as_str()))
+                    })
+                    .count(),
+                AstFeature::CommentContains(needles) => ret
+                    .program
+                    .comments
+                    .iter()
+                    .filter(|comment| {
+                        let value = comment.content_span().source_text(&source_text);
+                        needles.iter().any(|p| value.contains(p.as_str()))
+                    })
+                    .count(),
+                AstFeature::FunctionLength(_) | AstFeature::FileLines(_) => 0,
+            };
+
+            fr.count = file_count;
+            if file_count > 0 {
+                let rel = make_relative(path, working_directory);
+                fr.attributed.push((rel, file_count as f64 * error_penalty));
+            }
+
+            Ok(fr)
+        })
+        .collect();
+
     let mut attributed: Vec<(String, f64)> = Vec::new();
     let mut total_count: usize = 0;
     let mut total_long_functions: usize = 0;
@@ -623,87 +730,14 @@ fn run_ast(
     let mut total_long_files: usize = 0;
     let mut total_excess_file_lines: usize = 0;
 
-    let mut allocator = Allocator::default();
-    for path in &file_paths {
-        allocator.reset();
-        // Use pre-read source from cache when available to avoid re-reading disk (#10).
-        // Clone the Arc (pointer copy) rather than the string contents.
-        let source_text: Arc<String> = match source_cache.and_then(|c| c.get(path)) {
-            Some(Ok(s)) => Arc::clone(s),
-            Some(Err(e)) => return Err(e.clone()),
-            None => Arc::new(
-                std::fs::read_to_string(path)
-                    .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?,
-            ),
-        };
-
-        if let AstFeature::FileLines(max_file_lines) = feature {
-            let line_index = SourceLineIndex::new(source_text.as_str());
-            let excess_lines = line_index.file_line_count().saturating_sub(max_file_lines);
-            total_excess_file_lines += excess_lines;
-            if excess_lines > 0 {
-                total_long_files += 1;
-                let rel = make_relative(path, working_directory);
-                attributed.push((rel, excess_lines as f64 * error_penalty));
-            }
-            continue;
-        }
-
-        let source_type = SourceType::from_path(path).unwrap_or_default();
-        let ret = Parser::new(&allocator, &source_text, source_type)
-            .with_options(ParseOptions {
-                parse_regular_expression: true,
-                ..ParseOptions::default()
-            })
-            .parse();
-
-        if let AstFeature::FunctionLength(max_function_lines) = feature {
-            let mut counter =
-                AstFunctionLengthCounter::new(source_text.as_str(), max_function_lines);
-            counter.visit_program(&ret.program);
-            total_long_functions += counter.long_function_count;
-            total_excess_function_lines += counter.excess_lines;
-            if counter.excess_lines > 0 {
-                let rel = make_relative(path, working_directory);
-                attributed.push((rel, counter.excess_lines as f64 * error_penalty));
-            }
-            continue;
-        }
-
-        let file_count = match &feature {
-            AstFeature::TypeCounter(targets) => {
-                let mut counter = AstTypeReferenceCounter::new(targets.clone());
-                counter.visit_program(&ret.program);
-                counter.count
-            }
-            AstFeature::CommentStartsWith(needles) => ret
-                .program
-                .comments
-                .iter()
-                .filter(|comment| {
-                    let value = comment.content_span().source_text(&source_text);
-                    let trimmed = value.trim_start();
-                    needles.iter().any(|p| trimmed.starts_with(p.as_str()))
-                })
-                .count(),
-            AstFeature::CommentContains(needles) => ret
-                .program
-                .comments
-                .iter()
-                .filter(|comment| {
-                    let value = comment.content_span().source_text(&source_text);
-                    needles.iter().any(|p| value.contains(p.as_str()))
-                })
-                .count(),
-            // Already handled above via `continue`.
-            AstFeature::FunctionLength(_) | AstFeature::FileLines(_) => 0,
-        };
-
-        total_count += file_count;
-        if file_count > 0 {
-            let rel = make_relative(path, working_directory);
-            attributed.push((rel, file_count as f64 * error_penalty));
-        }
+    for result in file_results {
+        let fr = result?;
+        attributed.extend(fr.attributed);
+        total_count += fr.count;
+        total_long_functions += fr.long_functions;
+        total_excess_function_lines += fr.excess_function_lines;
+        total_long_files += fr.long_files;
+        total_excess_file_lines += fr.excess_file_lines;
     }
 
     let details = match feature {
