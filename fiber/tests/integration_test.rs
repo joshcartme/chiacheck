@@ -118,6 +118,29 @@ fn test_build_health_score_attributed_tree() {
 }
 
 #[test]
+fn test_build_health_score_top_level_file_penalty_is_not_double_counted() {
+    let metrics = vec![metric_result(
+        "lint",
+        4.0,
+        vec![("foo.ts".to_string(), 4.0)],
+        0.0,
+        "4 penalty",
+    )];
+
+    let hs = build_health_score(metrics, None, Utc::now());
+
+    assert_close(hs.overall, 4.0);
+    assert_close(hs.tree.total_penalty(), 4.0);
+    assert_close(hs.tree.penalties["lint"], 4.0);
+
+    assert_eq!(hs.tree.children.len(), 1);
+    let leaf = &hs.tree.children[0];
+    assert_eq!(leaf.path, "foo.ts");
+    assert_close(leaf.total_penalty(), 4.0);
+    assert_close(leaf.penalties["lint"], 4.0);
+}
+
+#[test]
 fn test_build_health_score_mixes_attributed_and_unattributed() {
     let metrics = vec![
         metric_result(
@@ -416,11 +439,13 @@ fn test_failing_command_surfaces_error() {
 #[test]
 fn test_get_commits_in_range_no_duplicate() {
     let result = fiber::git::get_commits_in_range("HEAD", "HEAD");
-    if let Ok(commits) = result { assert!(
-        commits.is_empty(),
-        "A..A should yield no commits, got: {:?}",
-        commits
-    ) }
+    if let Ok(commits) = result {
+        assert!(
+            commits.is_empty(),
+            "A..A should yield no commits, got: {:?}",
+            commits
+        )
+    }
 }
 
 #[test]

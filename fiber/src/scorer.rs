@@ -13,6 +13,10 @@ pub struct PenaltyNode {
 }
 
 impl PenaltyNode {
+    /// Returns the sum of this node's already-aggregated penalty map.
+    ///
+    /// Directory nodes include descendant penalties in `penalties`, so this
+    /// intentionally does not recurse into children.
     pub fn total_penalty(&self) -> f64 {
         self.penalties.values().sum()
     }
@@ -85,14 +89,18 @@ impl BuilderNode {
         }
     }
 
+    fn add_penalties(&mut self, file_penalties: &HashMap<String, f64>) {
+        for (k, v) in file_penalties {
+            *self.penalties.entry(k.clone()).or_insert(0.0) += v;
+        }
+    }
+
     /// Insert a file's penalty map at `path` (relative, `/`-separated).
     /// Accumulates penalties at every ancestor on the way down so that
     /// directory nodes always reflect the full sum of their descendants.
     fn insert(&mut self, path: &str, file_penalties: &HashMap<String, f64>) {
         // Accumulate at this (ancestor/root) node.
-        for (k, v) in file_penalties {
-            *self.penalties.entry(k.clone()).or_insert(0.0) += v;
-        }
+        self.add_penalties(file_penalties);
         if let Some(slash) = path.find('/') {
             let dir = &path[..slash];
             let rest = &path[slash + 1..];
@@ -106,9 +114,7 @@ impl BuilderNode {
                 .children
                 .entry(path.to_string())
                 .or_insert_with(BuilderNode::new);
-            for (k, v) in file_penalties {
-                *leaf.penalties.entry(k.clone()).or_insert(0.0) += v;
-            }
+            leaf.add_penalties(file_penalties);
         }
     }
 
