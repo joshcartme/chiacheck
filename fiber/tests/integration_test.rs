@@ -1130,7 +1130,7 @@ fn test_run_all_metrics_order_preserved() {
     assert_close(results[2].total_penalty, 3.0);
 }
 
-// --- run_ast_metrics_batch: shared parse correctness -------------------------
+// --- run_all_metrics: multiple AST metrics -----------------------------------
 
 /// Two AST metrics targeting the same file via `run_all_metrics` must each produce
 /// the same result as `run_metric` called individually.
@@ -1199,7 +1199,7 @@ fn test_ast_metrics_shared_parse_same_file_correctness() {
     let single_fn = run_metric(&cfg_fn, dir.path());
     let single_comment = run_metric(&cfg_comment, dir.path());
 
-    // Batch result via run_all_metrics (exercises run_ast_metrics_batch).
+    // Batch result via run_all_metrics.
     let batch = run_all_metrics(&[cfg_any, cfg_fn, cfg_comment], dir.path());
 
     assert_eq!(batch.len(), 3);
