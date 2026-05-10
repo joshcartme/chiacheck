@@ -588,7 +588,9 @@ fn run_ast(
     let mut total_long_files: usize = 0;
     let mut total_excess_file_lines: usize = 0;
 
+    let mut allocator = Allocator::default();
     for path in &file_paths {
+        allocator.reset();
         // Use pre-read source from cache when available to avoid re-reading disk (#10).
         // Clone the Arc (pointer copy) rather than the string contents.
         let source_text: Arc<String> = match source_cache.and_then(|c| c.get(path)) {
@@ -613,7 +615,6 @@ fn run_ast(
         }
 
         let source_type = SourceType::from_path(path).unwrap_or_default();
-        let allocator = Allocator::default();
         let ret = Parser::new(&allocator, &source_text, source_type)
             .with_options(ParseOptions {
                 parse_regular_expression: true,
