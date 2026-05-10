@@ -48,13 +48,14 @@ pub fn build_health_score(
 
     // Flatten attributed entries into (file_path, metric_name, penalty) triples.
     // Multiple metrics may attribute penalties to the same file.
-    let mut file_map: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    // Borrow `&str` keys from `metrics` until the tree is built (avoids cloning paths/names here).
+    let mut file_map: HashMap<&str, HashMap<&str, f64>> = HashMap::new();
     for m in &metrics {
         for (path, penalty) in &m.attributed {
             *file_map
-                .entry(path.clone())
+                .entry(path.as_str())
                 .or_default()
-                .entry(m.name.clone())
+                .entry(m.name.as_str())
                 .or_insert(0.0) += penalty;
         }
     }
@@ -89,16 +90,16 @@ impl BuilderNode {
         }
     }
 
-    fn add_penalties(&mut self, file_penalties: &HashMap<String, f64>) {
+    fn add_penalties(&mut self, file_penalties: &HashMap<&str, f64>) {
         for (k, v) in file_penalties {
-            *self.penalties.entry(k.clone()).or_insert(0.0) += v;
+            *self.penalties.entry((*k).to_string()).or_insert(0.0) += v;
         }
     }
 
     /// Insert a file's penalty map at `path` (relative, `/`-separated).
     /// Accumulates penalties at every ancestor on the way down so that
     /// directory nodes always reflect the full sum of their descendants.
-    fn insert(&mut self, path: &str, file_penalties: &HashMap<String, f64>) {
+    fn insert(&mut self, path: &str, file_penalties: &HashMap<&str, f64>) {
         // Accumulate at this (ancestor/root) node.
         self.add_penalties(file_penalties);
         if let Some(slash) = path.find('/') {
@@ -135,11 +136,11 @@ impl BuilderNode {
     }
 }
 
-fn build_tree(file_map: HashMap<String, HashMap<String, f64>>) -> PenaltyNode {
+fn build_tree(file_map: HashMap<&str, HashMap<&str, f64>>) -> PenaltyNode {
     let mut root = BuilderNode::new();
     // No pre-sort needed: BuilderNode uses HashMap for O(1) child lookup (#16).
     for (path, file_penalties) in file_map {
-        root.insert(&path, &file_penalties);
+        root.insert(path, &file_penalties);
     }
     // Root node accumulates all penalties during insertion, so no aggregate pass (#15).
     root.into_penalty_node(String::new())

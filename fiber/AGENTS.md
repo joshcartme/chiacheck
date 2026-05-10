@@ -58,7 +58,7 @@ cargo fiber history --days 30 --output history.html
 - `ast` parses JS/TS with oxc except `max_file_lines` (raw line counts). Modes count: AST nodes, comment matches, excess function-span lines over limit, or excess file lines over limit.
 - `error_penalty` defaults to `1.0`; `warning_penalty` defaults to `0.5` for lint.
 - `make_relative` normalizes to the working directory passed into `run_metric` / `run_all_metrics`.
-- Prefer `run_all_metrics`; it runs in parallel and preloads AST source files into `source_cache`.
+- Prefer `run_all_metrics`; it preloads AST sources into `source_cache` and executes each metric in parallel on the rayon thread pool (each AST metric still parses files sequentially within that metric).
 
 ## Scoring Rules
 

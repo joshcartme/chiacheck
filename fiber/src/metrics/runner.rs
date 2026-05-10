@@ -29,6 +29,17 @@ fn command_exit_acceptable(status: std::process::ExitStatus, completed_codes: &[
     }
 }
 
+/// Case-insensitive ASCII substring match without allocating a lowercased string.
+fn ascii_contains_ci(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() || h.len() < n.len() {
+        return n.is_empty();
+    }
+    h.windows(n.len())
+        .any(|w| w.iter().zip(n).all(|(a, b)| a.eq_ignore_ascii_case(b)))
+}
+
 fn format_command_failure(status: std::process::ExitStatus, stdout: &str, stderr: &str) -> String {
     let mut msg = format!("Command failed ({}):", status);
     let out_trim = stdout.trim();
@@ -247,7 +258,9 @@ fn run_lint_tool(command: &str, config: &MetricConfig, working_directory: &Path)
     let warning_penalty = config.warning_penalty.unwrap_or(0.5);
 
     // Typed parse: avoids building a generic JSON DOM (#6)
-    if let Ok(files) = serde_json::from_str::<Vec<LintFileResult>>(&output) {
+    if output.trim_start().starts_with('[')
+        && let Ok(files) = serde_json::from_str::<Vec<LintFileResult>>(&output)
+    {
         let mut attributed: Vec<(String, f64)> = Vec::new();
         let mut total_errors = 0u64;
         let mut total_warnings = 0u64;
@@ -270,10 +283,9 @@ fn run_lint_tool(command: &str, config: &MetricConfig, working_directory: &Path)
 
     // Text fallback: single pass, case-insensitive (#8)
     let (errors, warnings) = output.lines().fold((0usize, 0usize), |(e, w), line| {
-        let lower = line.to_lowercase();
         (
-            e + usize::from(lower.contains("error")),
-            w + usize::from(lower.contains("warning")),
+            e + usize::from(ascii_contains_ci(line, "error")),
+            w + usize::from(ascii_contains_ci(line, "warning")),
         )
     });
     let penalty = errors as f64 * error_penalty + warnings as f64 * warning_penalty;
@@ -304,7 +316,9 @@ fn run_coverage(command: &str, working_directory: &Path) -> RunResult {
     let trimmed = output.trim();
 
     // Typed parse: avoids building a generic JSON DOM (#7)
-    if let Ok(coverage) = serde_json::from_str::<HashMap<String, CoverageEntry>>(trimmed) {
+    if trimmed.starts_with('{')
+        && let Ok(coverage) = serde_json::from_str::<HashMap<String, CoverageEntry>>(trimmed)
+    {
         let mut attributed: Vec<(String, f64)> = Vec::new();
         let mut found_file = false;
         for (key, entry) in &coverage {
@@ -364,7 +378,7 @@ fn run_score_type(command: &str) -> RunResult {
 }
 
 fn resolve_files(patterns: &[String], working_directory: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut paths: Vec<PathBuf> = Vec::new();
     for pattern in patterns {
         let full_pattern = working_directory.join(pattern);
         let full_pattern_str = full_pattern.to_string_lossy();
@@ -372,22 +386,19 @@ fn resolve_files(patterns: &[String], working_directory: &Path) -> Result<Vec<Pa
             .map_err(|e| format!("Invalid glob pattern '{}': {}", pattern, e))?;
         for entry in entries {
             match entry {
-                Ok(path) => {
-                    seen.insert(path);
-                }
+                Ok(path) => paths.push(path),
                 Err(e) => eprintln!("Warning: glob error: {}", e),
             }
         }
     }
-    if seen.is_empty() {
+    if paths.is_empty() {
         return Err(format!(
             "No files matched patterns: {}",
             patterns.join(", ")
         ));
     }
-    // Dedup via HashSet, sort once for deterministic order (#11)
-    let mut paths: Vec<PathBuf> = seen.into_iter().collect();
     paths.sort();
+    paths.dedup();
     Ok(paths)
 }
 
