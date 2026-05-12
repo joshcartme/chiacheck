@@ -1,4 +1,4 @@
-use crate::config::MetricConfig;
+use crate::config::{AstFeature, MetricConfig};
 use crate::metrics::MetricResult;
 use crate::metrics::ast_type_map::ast_type_from_str;
 use oxc_allocator::Allocator;
@@ -27,6 +27,17 @@ fn command_exit_acceptable(status: std::process::ExitStatus, completed_codes: &[
         Some(code) => completed_codes.contains(&code),
         None => false,
     }
+}
+
+/// Case-insensitive ASCII substring match without allocating a lowercased string.
+fn ascii_contains_ci(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() || h.len() < n.len() {
+        return n.is_empty();
+    }
+    h.windows(n.len())
+        .any(|w| w.iter().zip(n).all(|(a, b)| a.eq_ignore_ascii_case(b)))
 }
 
 fn format_command_failure(status: std::process::ExitStatus, stdout: &str, stderr: &str) -> String {
@@ -247,7 +258,9 @@ fn run_lint_tool(command: &str, config: &MetricConfig, working_directory: &Path)
     let warning_penalty = config.warning_penalty.unwrap_or(0.5);
 
     // Typed parse: avoids building a generic JSON DOM (#6)
-    if let Ok(files) = serde_json::from_str::<Vec<LintFileResult>>(&output) {
+    if output.trim_start().starts_with('[')
+        && let Ok(files) = serde_json::from_str::<Vec<LintFileResult>>(&output)
+    {
         let mut attributed: Vec<(String, f64)> = Vec::new();
         let mut total_errors = 0u64;
         let mut total_warnings = 0u64;
@@ -270,10 +283,9 @@ fn run_lint_tool(command: &str, config: &MetricConfig, working_directory: &Path)
 
     // Text fallback: single pass, case-insensitive (#8)
     let (errors, warnings) = output.lines().fold((0usize, 0usize), |(e, w), line| {
-        let lower = line.to_lowercase();
         (
-            e + usize::from(lower.contains("error")),
-            w + usize::from(lower.contains("warning")),
+            e + usize::from(ascii_contains_ci(line, "error")),
+            w + usize::from(ascii_contains_ci(line, "warning")),
         )
     });
     let penalty = errors as f64 * error_penalty + warnings as f64 * warning_penalty;
@@ -304,7 +316,9 @@ fn run_coverage(command: &str, working_directory: &Path) -> RunResult {
     let trimmed = output.trim();
 
     // Typed parse: avoids building a generic JSON DOM (#7)
-    if let Ok(coverage) = serde_json::from_str::<HashMap<String, CoverageEntry>>(trimmed) {
+    if trimmed.starts_with('{')
+        && let Ok(coverage) = serde_json::from_str::<HashMap<String, CoverageEntry>>(trimmed)
+    {
         let mut attributed: Vec<(String, f64)> = Vec::new();
         let mut found_file = false;
         for (key, entry) in &coverage {
@@ -364,7 +378,7 @@ fn run_score_type(command: &str) -> RunResult {
 }
 
 fn resolve_files(patterns: &[String], working_directory: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut paths: Vec<PathBuf> = Vec::new();
     for pattern in patterns {
         let full_pattern = working_directory.join(pattern);
         let full_pattern_str = full_pattern.to_string_lossy();
@@ -372,22 +386,19 @@ fn resolve_files(patterns: &[String], working_directory: &Path) -> Result<Vec<Pa
             .map_err(|e| format!("Invalid glob pattern '{}': {}", pattern, e))?;
         for entry in entries {
             match entry {
-                Ok(path) => {
-                    seen.insert(path);
-                }
+                Ok(path) => paths.push(path),
                 Err(e) => eprintln!("Warning: glob error: {}", e),
             }
         }
     }
-    if seen.is_empty() {
+    if paths.is_empty() {
         return Err(format!(
             "No files matched patterns: {}",
             patterns.join(", ")
         ));
     }
-    // Dedup via HashSet, sort once for deterministic order (#11)
-    let mut paths: Vec<PathBuf> = seen.into_iter().collect();
     paths.sort();
+    paths.dedup();
     Ok(paths)
 }
 
@@ -499,14 +510,25 @@ impl SourceLineIndex {
 /// Counts long function-like nodes. In OXC, class and object methods are exposed
 /// as `Function` nodes, so this covers declarations, expressions, methods,
 /// getters/setters, constructors, and arrow functions.
-struct AstFunctionLengthCounter<'a> {
-    line_index: &'a SourceLineIndex,
+///
+/// Owns its `SourceLineIndex` so it can be held in a `Vec` alongside other visitors.
+struct AstFunctionLengthCounter {
+    line_index: SourceLineIndex,
     max_lines: usize,
     long_function_count: usize,
     excess_lines: usize,
 }
 
-impl AstFunctionLengthCounter<'_> {
+impl AstFunctionLengthCounter {
+    fn new(source_text: &str, max_lines: usize) -> Self {
+        Self {
+            line_index: SourceLineIndex::new(source_text),
+            max_lines,
+            long_function_count: 0,
+            excess_lines: 0,
+        }
+    }
+
     fn record_span(&mut self, span: Span) {
         let line_count = self.line_index.span_line_count(span);
         if line_count > self.max_lines {
@@ -516,7 +538,7 @@ impl AstFunctionLengthCounter<'_> {
     }
 }
 
-impl<'a> Visit<'a> for AstFunctionLengthCounter<'_> {
+impl<'a> Visit<'a> for AstFunctionLengthCounter {
     fn enter_node(&mut self, kind: AstKind<'a>) {
         match kind {
             AstKind::Function(function) if function.body.is_some() => {
@@ -535,33 +557,9 @@ fn run_ast(
     working_directory: &Path,
     source_cache: Option<&SourceCache>,
 ) -> RunResult {
-    let has_count_type_reference = config.ast_count_type_reference.is_some();
-    let has_startswith = config.comment_startswith.is_some();
-    let has_contains = config.comment_contains.is_some();
-    let has_max_function_lines = config.max_function_lines.is_some();
-    let has_max_file_lines = config.max_file_lines.is_some();
-    let feature_count = [
-        has_count_type_reference,
-        has_startswith,
-        has_contains,
-        has_max_function_lines,
-        has_max_file_lines,
-    ]
-    .iter()
-    .filter(|&&b| b)
-    .count();
-    if feature_count == 0 {
-        return Err(
-            "ast metric requires exactly one of: ast_count_type_reference, comment_startswith, comment_contains, max_function_lines, max_file_lines"
-                .to_string(),
-        );
-    }
-    if feature_count > 1 {
-        return Err(
-            "ast metric allows only one of: ast_count_type_reference, comment_startswith, comment_contains, max_function_lines, max_file_lines"
-                .to_string(),
-        );
-    }
+    use rayon::prelude::*;
+
+    let feature = config.parse_ast_feature()?;
 
     let patterns = config
         .files
@@ -570,6 +568,111 @@ fn run_ast(
         .ok_or_else(|| "ast metric requires `files` to be set and non-empty".to_string())?;
     let file_paths = resolve_files(patterns, working_directory)?;
     let error_penalty = config.error_penalty.unwrap_or(1.0);
+
+    struct FileResult {
+        attributed: Vec<(String, f64)>,
+        count: usize,
+        long_functions: usize,
+        excess_function_lines: usize,
+        long_files: usize,
+        excess_file_lines: usize,
+    }
+
+    let file_results: Vec<Result<FileResult, String>> = file_paths
+        .par_iter()
+        .map(|path| {
+            let source_text: Arc<String> = match source_cache.and_then(|c| c.get(path)) {
+                Some(Ok(s)) => Arc::clone(s),
+                Some(Err(e)) => return Err(e.clone()),
+                None => Arc::new(
+                    std::fs::read_to_string(path)
+                        .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?,
+                ),
+            };
+
+            let mut fr = FileResult {
+                attributed: Vec::new(),
+                count: 0,
+                long_functions: 0,
+                excess_function_lines: 0,
+                long_files: 0,
+                excess_file_lines: 0,
+            };
+
+            if let AstFeature::FileLines(max_file_lines) = &feature {
+                let line_index = SourceLineIndex::new(source_text.as_str());
+                let excess_lines = line_index.file_line_count().saturating_sub(*max_file_lines);
+                fr.excess_file_lines = excess_lines;
+                if excess_lines > 0 {
+                    fr.long_files = 1;
+                    let rel = make_relative(path, working_directory);
+                    fr.attributed
+                        .push((rel, excess_lines as f64 * error_penalty));
+                }
+                return Ok(fr);
+            }
+
+            let allocator = Allocator::default();
+            let source_type = SourceType::from_path(path).unwrap_or_default();
+            let ret = Parser::new(&allocator, &source_text, source_type)
+                .with_options(ParseOptions {
+                    parse_regular_expression: true,
+                    ..ParseOptions::default()
+                })
+                .parse();
+
+            if let AstFeature::FunctionLength(max_function_lines) = &feature {
+                let mut counter =
+                    AstFunctionLengthCounter::new(source_text.as_str(), *max_function_lines);
+                counter.visit_program(&ret.program);
+                fr.long_functions = counter.long_function_count;
+                fr.excess_function_lines = counter.excess_lines;
+                if counter.excess_lines > 0 {
+                    let rel = make_relative(path, working_directory);
+                    fr.attributed
+                        .push((rel, counter.excess_lines as f64 * error_penalty));
+                }
+                return Ok(fr);
+            }
+
+            let file_count = match &feature {
+                AstFeature::TypeCounter(targets) => {
+                    let mut counter = AstTypeReferenceCounter::new(targets.clone());
+                    counter.visit_program(&ret.program);
+                    counter.count
+                }
+                AstFeature::CommentStartsWith(needles) => ret
+                    .program
+                    .comments
+                    .iter()
+                    .filter(|comment| {
+                        let value = comment.content_span().source_text(&source_text);
+                        let trimmed = value.trim_start();
+                        needles.iter().any(|p| trimmed.starts_with(p.as_str()))
+                    })
+                    .count(),
+                AstFeature::CommentContains(needles) => ret
+                    .program
+                    .comments
+                    .iter()
+                    .filter(|comment| {
+                        let value = comment.content_span().source_text(&source_text);
+                        needles.iter().any(|p| value.contains(p.as_str()))
+                    })
+                    .count(),
+                AstFeature::FunctionLength(_) | AstFeature::FileLines(_) => 0,
+            };
+
+            fr.count = file_count;
+            if file_count > 0 {
+                let rel = make_relative(path, working_directory);
+                fr.attributed.push((rel, file_count as f64 * error_penalty));
+            }
+
+            Ok(fr)
+        })
+        .collect();
+
     let mut attributed: Vec<(String, f64)> = Vec::new();
     let mut total_count: usize = 0;
     let mut total_long_functions: usize = 0;
@@ -577,107 +680,30 @@ fn run_ast(
     let mut total_long_files: usize = 0;
     let mut total_excess_file_lines: usize = 0;
 
-    for path in &file_paths {
-        // Use pre-read source from cache when available to avoid re-reading disk (#10).
-        // Clone the Arc (pointer copy) rather than the string contents.
-        let source_text: Arc<String> = match source_cache.and_then(|c| c.get(path)) {
-            Some(Ok(s)) => Arc::clone(s),
-            Some(Err(e)) => return Err(e.clone()),
-            None => Arc::new(
-                std::fs::read_to_string(path)
-                    .map_err(|e| format!("Cannot read {}: {}", path.display(), e))?,
-            ),
-        };
-
-        if let Some(max_file_lines) = config.max_file_lines {
-            let line_index = SourceLineIndex::new(source_text.as_str());
-            let excess_lines = line_index.file_line_count().saturating_sub(max_file_lines);
-            total_excess_file_lines += excess_lines;
-            if excess_lines > 0 {
-                total_long_files += 1;
-                let rel = make_relative(path, working_directory);
-                attributed.push((rel, excess_lines as f64 * error_penalty));
-            }
-            continue;
-        }
-
-        let source_type = SourceType::from_path(path).unwrap_or_default();
-        let allocator = Allocator::default();
-        let ret = Parser::new(&allocator, &source_text, source_type)
-            .with_options(ParseOptions {
-                parse_regular_expression: true,
-                ..ParseOptions::default()
-            })
-            .parse();
-
-        if let Some(max_function_lines) = config.max_function_lines {
-            let line_index = SourceLineIndex::new(source_text.as_str());
-            let mut counter = AstFunctionLengthCounter {
-                line_index: &line_index,
-                max_lines: max_function_lines,
-                long_function_count: 0,
-                excess_lines: 0,
-            };
-            counter.visit_program(&ret.program);
-            total_long_functions += counter.long_function_count;
-            total_excess_function_lines += counter.excess_lines;
-            if counter.excess_lines > 0 {
-                let rel = make_relative(path, working_directory);
-                attributed.push((rel, counter.excess_lines as f64 * error_penalty));
-            }
-            continue;
-        }
-
-        let file_count = if let Some(targets) = &config.ast_count_type_reference {
-            let mut counter = AstTypeReferenceCounter::new(targets.clone());
-            counter.visit_program(&ret.program);
-            counter.count
-        } else if let Some(needles) = &config.comment_startswith {
-            ret.program
-                .comments
-                .iter()
-                .filter(|comment| {
-                    let value = comment.content_span().source_text(&source_text);
-                    let trimmed = value.trim_start();
-                    needles.iter().any(|p| trimmed.starts_with(p.as_str()))
-                })
-                .count()
-        } else if let Some(needles) = &config.comment_contains {
-            ret.program
-                .comments
-                .iter()
-                .filter(|comment| {
-                    let value = comment.content_span().source_text(&source_text);
-                    needles.iter().any(|p| value.contains(p.as_str()))
-                })
-                .count()
-        } else {
-            0
-        };
-
-        total_count += file_count;
-        if file_count > 0 {
-            let rel = make_relative(path, working_directory);
-            attributed.push((rel, file_count as f64 * error_penalty));
-        }
+    for result in file_results {
+        let fr = result?;
+        attributed.extend(fr.attributed);
+        total_count += fr.count;
+        total_long_functions += fr.long_functions;
+        total_excess_function_lines += fr.excess_function_lines;
+        total_long_files += fr.long_files;
+        total_excess_file_lines += fr.excess_file_lines;
     }
 
-    let details = if config.max_function_lines.is_some() {
-        format!(
+    let details = match feature {
+        AstFeature::FunctionLength(_) => format!(
             "{} long functions/methods, {} excess lines across {} files",
             total_long_functions,
             total_excess_function_lines,
             file_paths.len()
-        )
-    } else if config.max_file_lines.is_some() {
-        format!(
+        ),
+        AstFeature::FileLines(_) => format!(
             "{} long files, {} excess lines across {} files",
             total_long_files,
             total_excess_file_lines,
             file_paths.len()
-        )
-    } else {
-        format!("{} matches across {} files", total_count, file_paths.len())
+        ),
+        _ => format!("{} matches across {} files", total_count, file_paths.len()),
     };
 
     Ok((attributed, 0.0, details))

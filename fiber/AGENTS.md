@@ -14,7 +14,7 @@ Fiber workspace specific guidance. Keep this file terse and agent-focused; targe
 
 - `src/lib.rs`: exposes library modules.
 - `src/cli.rs`: clap definitions; `--config` is `global = true`; default is `fiber.toml`.
-- `src/config.rs`: TOML schema, `MetricConfig`, duplicate metric-name rejection.
+- `src/config.rs`: TOML schema, `MetricConfig`, `AstFeature` / `parse_ast_feature`, duplicate metric-name rejection.
 - `src/error.rs`: `FiberError`.
 - `src/git.rs`: git wrappers plus commit/date range traversal.
 - `src/metrics/mod.rs`: `MetricResult`.
@@ -58,7 +58,7 @@ cargo fiber history --days 30 --output history.html
 - `ast` parses JS/TS with oxc except `max_file_lines` (raw line counts). Modes count: AST nodes, comment matches, excess function-span lines over limit, or excess file lines over limit.
 - `error_penalty` defaults to `1.0`; `warning_penalty` defaults to `0.5` for lint.
 - `make_relative` normalizes to the working directory passed into `run_metric` / `run_all_metrics`.
-- Prefer `run_all_metrics`; it runs in parallel and preloads AST source files into `source_cache`.
+- Prefer `run_all_metrics`; it preloads AST sources into `source_cache`, runs **each metric** on the rayon thread pool, and **`run_ast` parses matched files in parallel** within that metric (`max_file_lines` only line-counts, no parser).
 
 ## Scoring Rules
 
@@ -89,7 +89,7 @@ cargo fiber history --days 30 --output history.html
 
 ## Common Tasks
 
-- Add/change metric type: update `src/metrics/runner.rs`, README config docs, `fiber.example.toml` if relevant, and integration tests.
+- Add/change metric type: update `src/metrics/runner.rs` (and `src/config.rs` for `ast` sub-features / `AstFeature`), README config docs, `fiber.example.toml` if relevant, and integration tests.
 - Change CLI: update `src/cli.rs`, keep `src/main.rs` thin, update README CLI docs.
 - Change scoring: update `src/scorer.rs`; preserve penalty accumulation semantics and add focused tests.
 - Change git range semantics: update `src/git.rs` and tests for chronological, duplicate-free output.
