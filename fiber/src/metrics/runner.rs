@@ -1,7 +1,7 @@
 use crate::config::{AstFeature, MetricConfig};
 use crate::metrics::MetricResult;
 use crate::metrics::ast_type_map::ast_type_from_str;
-use oxc_allocator::Allocator;
+use oxc_allocator::AllocatorPool;
 use oxc_ast::{AstKind, AstType};
 use oxc_ast_visit::Visit;
 use oxc_parser::{ParseOptions, Parser};
@@ -579,6 +579,7 @@ fn run_ast(
         .ok_or_else(|| "ast metric requires `files` to be set and non-empty".to_string())?;
     let file_paths = resolve_files(patterns, working_directory)?;
     let error_penalty = config.error_penalty.unwrap_or(1.0);
+    let allocator_pool = AllocatorPool::new(rayon::current_num_threads().max(1));
 
     struct FileResult {
         attributed: Vec<(String, f64)>,
@@ -625,9 +626,9 @@ fn run_ast(
                 return Ok(fr);
             }
 
-            let allocator = Allocator::default();
+            let alloc_guard = allocator_pool.get();
             let source_type = SourceType::from_path(path).unwrap_or_default();
-            let ret = Parser::new(&allocator, &source_text, source_type)
+            let ret = Parser::new(&alloc_guard, &source_text, source_type)
                 .with_options(ParseOptions {
                     parse_regular_expression: true,
                     ..ParseOptions::default()
