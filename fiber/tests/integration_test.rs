@@ -652,8 +652,8 @@ fn test_ast_max_function_lines_counts_functions_and_methods() {
     };
     let result = run_metric(&config, dir.path());
     assert!(
-        (result.total_penalty - 3.0).abs() < 0.01,
-        "Expected 3.0, got {} (details: {})",
+        (result.total_penalty - 1.0).abs() < 0.01,
+        "Expected 1.0, got {} (details: {})",
         result.total_penalty,
         result.details
     );
@@ -689,8 +689,8 @@ fn test_ast_max_function_lines_counts_concise_arrow_functions() {
     };
     let result = run_metric(&config, dir.path());
     assert!(
-        (result.total_penalty - 2.0).abs() < 0.01,
-        "Expected 2.0, got {} (details: {})",
+        (result.total_penalty - 1.0).abs() < 0.01,
+        "Expected 1.0, got {} (details: {})",
         result.total_penalty,
         result.details
     );
@@ -722,8 +722,8 @@ fn test_ast_max_file_lines_penalizes_excess_lines() {
     };
     let result = run_metric(&config, dir.path());
     assert!(
-        (result.total_penalty - 2.0).abs() < 0.01,
-        "Expected 2.0, got {} (details: {})",
+        (result.total_penalty - 1.0).abs() < 0.01,
+        "Expected 1.0, got {} (details: {})",
         result.total_penalty,
         result.details
     );

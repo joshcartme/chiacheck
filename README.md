@@ -225,7 +225,7 @@ error_penalty = 1.0
 
 Counts the line span of each function-like node, including function declarations, function expressions, methods, constructors, getters/setters, and arrow functions.
 
-**Penalty per file** = `sum(max(0, function_lines - max_function_lines)) × error_penalty`
+**Penalty per file**: let `excess` be the sum of `max(0, function_lines - max_function_lines)` over each function whose span exceeds the limit. If `excess` is zero, the penalty is `0`. Otherwise it is `max(error_penalty, (excess / max_function_lines) × error_penalty)`.
 
 ```toml
 [[metrics]]
@@ -240,7 +240,7 @@ error_penalty = 1.0
 
 Counts physical lines in each matched file, with or without a trailing newline.
 
-**Penalty per file** = `max(0, file_lines - max_file_lines) × error_penalty`
+**Penalty per file**: let `excess = max(0, file_lines - max_file_lines)`. If `excess` is zero, the penalty is `0`. Otherwise it is `max(error_penalty, (excess / max_file_lines) × error_penalty)`.
 
 ```toml
 [[metrics]]

@@ -552,6 +552,17 @@ impl<'a> Visit<'a> for AstFunctionLengthCounter {
     }
 }
 
+/// Penalty for `max_file_lines` / `max_function_lines`: `(excess / max_lines) * error_penalty`,
+/// floored to `error_penalty` whenever `excess_lines > 0`.
+fn ast_line_limit_excess_penalty(excess_lines: usize, max_lines: usize, error_penalty: f64) -> f64 {
+    if excess_lines == 0 {
+        return 0.0;
+    }
+    let denom = max_lines.max(1) as f64;
+    let scaled = (excess_lines as f64 / denom) * error_penalty;
+    scaled.max(error_penalty)
+}
+
 fn run_ast(
     config: &MetricConfig,
     working_directory: &Path,
@@ -606,8 +617,10 @@ fn run_ast(
                 if excess_lines > 0 {
                     fr.long_files = 1;
                     let rel = make_relative(path, working_directory);
-                    fr.attributed
-                        .push((rel, excess_lines as f64 * error_penalty));
+                    fr.attributed.push((
+                        rel,
+                        ast_line_limit_excess_penalty(excess_lines, *max_file_lines, error_penalty),
+                    ));
                 }
                 return Ok(fr);
             }
@@ -629,8 +642,14 @@ fn run_ast(
                 fr.excess_function_lines = counter.excess_lines;
                 if counter.excess_lines > 0 {
                     let rel = make_relative(path, working_directory);
-                    fr.attributed
-                        .push((rel, counter.excess_lines as f64 * error_penalty));
+                    fr.attributed.push((
+                        rel,
+                        ast_line_limit_excess_penalty(
+                            counter.excess_lines,
+                            *max_function_lines,
+                            error_penalty,
+                        ),
+                    ));
                 }
                 return Ok(fr);
             }

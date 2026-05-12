@@ -55,7 +55,7 @@ cargo fiber history --days 30 --output history.html
 - `score`: finite numeric stdout; raw value is unattributed penalty.
 - `ast`: no command. Exactly one mode: `ast_count_type_reference`, `comment_startswith`, `comment_contains`, `max_function_lines`, or `max_file_lines`.
 - `ast_count_type_reference`: strings equal to an oxc `AstType` variant name match `AstKind::ty()` first; `"any"` maps to `TSAnyKeyword`; otherwise simple `TSTypeReference` identifier (not qualified).
-- `ast` parses JS/TS with oxc except `max_file_lines` (raw line counts). Modes count: AST nodes, comment matches, excess function-span lines over limit, or excess file lines over limit.
+- `ast` parses JS/TS with oxc except `max_file_lines` (raw line counts). Modes count: AST nodes, comment matches, or line-limit excess; `max_function_lines` / `max_file_lines` penalties use `(excess / max) × error_penalty` floored to `error_penalty` when `excess > 0`.
 - `error_penalty` defaults to `1.0`; `warning_penalty` defaults to `0.5` for lint.
 - `make_relative` normalizes to the working directory passed into `run_metric` / `run_all_metrics`.
 - Prefer `run_all_metrics`; it preloads AST sources into `source_cache`, runs **each metric** on the rayon thread pool, and **`run_ast` parses matched files in parallel** within that metric (`max_file_lines` only line-counts, no parser).
