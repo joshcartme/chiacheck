@@ -1338,6 +1338,7 @@ fn test_run_all_metrics_mixed_ast_non_ast_order() {
 #[test]
 fn test_db_enabled_false_no_file_created() {
     use fiber::config::{Config, DatabaseConfig};
+    use fiber::main_helpers::open_db_if_enabled;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -1352,10 +1353,39 @@ fn test_db_enabled_false_no_file_created() {
         }),
     };
 
-    // Predicate: disabled means no file.
-    let should_open = cfg.database.as_ref().is_some_and(|d| d.enabled);
-    assert!(!should_open);
+    let result = open_db_if_enabled(&cfg.database);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_none());
     assert!(!db_path.exists(), "DB file must not exist when disabled");
+}
+
+#[test]
+fn test_db_decline_non_interactive_returns_error() {
+    use fiber::config::{Config, DatabaseConfig};
+    use fiber::main_helpers::{DECLINE_CREATE_DB_MSG, open_db_if_enabled_interactive};
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("should_not_exist.db");
+
+    let cfg = Config {
+        metrics: vec![],
+        database: Some(DatabaseConfig {
+            enabled: true,
+            path: Some(db_path.to_string_lossy().to_string()),
+        }),
+    };
+
+    // `open_db_if_enabled` uses stdin TTY detection, which is often true under
+    // `cargo test` in a normal terminal. Force non-interactive so we never read stdin.
+    let result = open_db_if_enabled_interactive(&cfg.database, false).map(|_| ());
+    assert!(result.is_err(), "expected error when declining DB creation");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains(DECLINE_CREATE_DB_MSG),
+        "expected error to contain decline message, got: {msg}"
+    );
+    assert!(!db_path.exists(), "DB file must not exist after decline");
 }
 
 #[test]
@@ -1381,14 +1411,13 @@ fn test_db_cache_hit_and_miss() {
     let db = Db::open(tmp.path()).unwrap();
 
     let sha = "cafebabe00000000";
-    assert!(!db.has_commit(sha).unwrap(), "miss before insert");
+    assert!(db.get_score(sha).unwrap().is_none(), "miss before insert");
 
     let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
     db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
 
-    assert!(db.has_commit(sha).unwrap(), "hit after insert");
     let loaded = db.get_score(sha).unwrap().unwrap();
-    assert_eq!(loaded.commit.as_deref(), Some(sha));
+    assert_eq!(loaded.commit.as_deref(), Some(sha), "hit after insert");
 }
 
 #[test]

@@ -2,13 +2,10 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use fiber::cli::{Cli, Commands};
-use fiber::config::{Config, DatabaseConfig, load_config};
-use fiber::db::{Db, resolved_db_path};
+use fiber::config::{Config, load_config};
+use fiber::db::Db;
 use fiber::git::CommitInfo;
-use fiber::main_helpers::{
-    CachedAction, CreateDbFile, DECLINE_CREATE_DB_MSG, prompt_cached_action,
-    prompt_create_database_file,
-};
+use fiber::main_helpers::{CachedAction, open_db_if_enabled, prompt_cached_action};
 use fiber::metrics::runner::run_all_metrics;
 use fiber::scorer::{HealthScore, build_health_score};
 use fiber::{git, report};
@@ -59,37 +56,6 @@ fn score_with_config(
     build_health_score(results, commit, timestamp)
 }
 
-/// Open the database if `database.enabled == true`. Handles the missing-file prompt.
-/// Returns `None` when the database is disabled, `Some(Db)` when open, or exits the
-/// process (non-zero) if the user declines to create the file.
-fn open_db_if_enabled(database: &Option<DatabaseConfig>) -> Result<Option<Db>> {
-    let cfg = match database {
-        Some(d) if d.enabled => d,
-        _ => return Ok(None),
-    };
-
-    let path = resolved_db_path(cfg);
-
-    if !path.exists() {
-        let is_term = std::io::stdin().is_terminal();
-        let mut stdin = std::io::stdin().lock();
-        let mut stdout = std::io::stdout().lock();
-        match prompt_create_database_file(&path, &mut stdin, &mut stdout, is_term)? {
-            CreateDbFile::Yes => {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-            }
-            CreateDbFile::No => {
-                eprintln!("{DECLINE_CREATE_DB_MSG}");
-                std::process::exit(1);
-            }
-        }
-    }
-
-    Ok(Some(Db::open(&path)?))
-}
-
 /// Print all scores and optionally write an HTML report.
 fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> {
     for s in scores {
@@ -112,16 +78,14 @@ fn run_score_command(config_path: &str, force: bool) -> Result<()> {
     // Check cache when DB is active, commit is known, and not forcing.
     if let (Some(db_ref), Some(sha)) = (&db, &commit)
         && !force
-        && db_ref.has_commit(sha)?
+        && let Some(cached) = db_ref.get_score(sha)?
     {
         let is_term = std::io::stdin().is_terminal();
         let mut stdin = std::io::stdin().lock();
         let mut stdout = std::io::stdout().lock();
         match prompt_cached_action(sha, &mut stdin, &mut stdout, is_term)? {
             CachedAction::ShowCached => {
-                if let Some(cached) = db_ref.get_score(sha)? {
-                    print_score(&cached);
-                }
+                print_score(&cached);
                 return Ok(());
             }
             CachedAction::ReRun => {}
@@ -140,9 +104,10 @@ fn run_score_command(config_path: &str, force: bool) -> Result<()> {
 
 /// Check out each commit in `commits`, run metrics, then restore HEAD.
 /// Cached commits (when `db` is `Some` and `!force`) skip checkout entirely.
+/// Each checked-out commit is scored against the `fiber.toml` present at that
+/// commit, not the config from the caller's working tree.
 fn score_commits(
     commits: &[CommitInfo],
-    config: &Config,
     config_path: &str,
     db: Option<&Db>,
     force: bool,
@@ -159,7 +124,6 @@ fn score_commits(
         // Cache hit: skip checkout entirely.
         if let Some(db_ref) = db
             && !force
-            && db_ref.has_commit(sha)?
             && let Some(cached) = db_ref.get_score(sha)?
         {
             scores.push(cached);
@@ -186,8 +150,9 @@ fn score_commits(
         }
         checked_out = true;
 
+        let config = load_config(config_path)?;
         let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
-        let score = score_with_config(config, Some(sha.clone()), timestamp);
+        let score = score_with_config(&config, Some(sha.clone()), timestamp);
         if let Some(db_ref) = db
             && let Err(e) = db_ref.upsert_score(sha, config_path, &score, &config.metrics)
         {
@@ -226,7 +191,7 @@ fn run_range_command(
         println!("No commits found in range {}..{}", from, to);
         return Ok(());
     }
-    let scores = score_commits(&commits, &config, config_path, db.as_ref(), force)?;
+    let scores = score_commits(&commits, config_path, db.as_ref(), force)?;
     print_and_report(&scores, output)
 }
 
@@ -258,7 +223,7 @@ fn run_history_command(
         println!("No commits found between {} and {}", from_str, to_str);
         return Ok(());
     }
-    let scores = score_commits(&commits, &config, config_path, db.as_ref(), force)?;
+    let scores = score_commits(&commits, config_path, db.as_ref(), force)?;
     print_and_report(&scores, output)
 }
 

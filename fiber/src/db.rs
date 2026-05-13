@@ -21,6 +21,13 @@ impl Db {
         )
         .with_context(|| "Failed to set SQLite pragmas")?;
 
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .with_context(|| "Failed to read journal_mode")?;
+        if mode != "wal" {
+            anyhow::bail!("SQLite journal_mode is '{mode}', expected 'wal'");
+        }
+
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS scores (
                 commit_hash   TEXT PRIMARY KEY,
@@ -174,6 +181,7 @@ mod tests {
         assert!(db.has_commit(sha).unwrap());
 
         let loaded = db.get_score(sha).unwrap().unwrap();
+        assert_eq!(loaded.commit.as_deref(), Some(sha));
         assert_eq!(loaded.overall, score.overall);
         assert_eq!(loaded.commit, score.commit);
         // timestamp stored and round-tripped
