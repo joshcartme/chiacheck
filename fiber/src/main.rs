@@ -119,15 +119,24 @@ fn score_commits(
     let mut checked_out = false;
 
     for info in commits {
+        // NEVER use ? in this loop - an error must not skip the restore block below.
         let sha = &info.sha;
 
         // Cache hit: skip checkout entirely.
         if let Some(db_ref) = db
             && !force
-            && let Some(cached) = db_ref.get_score(sha)?
         {
-            scores.push(cached);
-            continue;
+            match db_ref.get_score(sha) {
+                Ok(Some(cached)) => {
+                    scores.push(cached);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("Warning: error loading cached score for {sha}: {e}");
+                    error_occurred = true;
+                }
+            }
         }
 
         // First actual checkout: capture HEAD lazily.
@@ -150,7 +159,14 @@ fn score_commits(
         }
         checked_out = true;
 
-        let config = load_config(config_path)?;
+        let config = match load_config(config_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Warning: could not load {config_path} on {sha}: {e}");
+                error_occurred = true;
+                continue;
+            }
+        };
         let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
         let score = score_with_config(&config, Some(sha.clone()), timestamp);
         if let Some(db_ref) = db
