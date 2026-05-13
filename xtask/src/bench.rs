@@ -6,7 +6,7 @@
 //! `<RUNS>` times, then does the same for the `main` branch via a temporary git
 //! worktree, and finally prints per-run timings and averages for both branches.
 
-use crate::lib::workspace_root;
+use crate::util::workspace_root;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -154,6 +154,12 @@ fn bench_binary(binary: &Path, target_dir: &Path, runs: usize) -> Result<Vec<f64
             format!("could not parse elapsed time from `/usr/bin/time` output:\n{stderr}")
         })?;
 
+        if !out.status.success() {
+            bail!(
+                "`fiber score` failed during benchmark run {i}/{runs} after {elapsed:.3}s:\n{stderr}"
+            );
+        }
+
         println!("{elapsed:.3}s");
         times.push(elapsed);
     }
@@ -180,11 +186,30 @@ fn average(times: &[f64]) -> f64 {
 
 /// Remove a git worktree (best-effort; errors are printed but not propagated).
 fn remove_worktree(workspace_root: &Path, worktree_dir: &Path) {
-    let _ = Command::new("git")
+    match Command::new("git")
         .args(["worktree", "remove", "--force"])
         .arg(worktree_dir)
         .current_dir(workspace_root)
-        .output();
+        .output()
+    {
+        Ok(out) => {
+            if !out.status.success() {
+                eprintln!(
+                    "warning: failed to remove git worktree {}",
+                    worktree_dir.display()
+                );
+                eprintln!(
+                    "stderr: {}\n stcout: {}",
+                    String::from_utf8_lossy(&out.stderr),
+                    String::from_utf8_lossy(&out.stdout)
+                );
+            }
+        }
+        Err(err) => eprintln!(
+            "warning: failed to run `git worktree remove --force {}`: {err}",
+            worktree_dir.display()
+        ),
+    }
 }
 
 fn print_results(branch_a: &str, times_a: &[f64], branch_b: &str, times_b: &[f64]) {

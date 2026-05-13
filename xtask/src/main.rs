@@ -5,7 +5,7 @@
 mod bench;
 mod check_oxc_version;
 mod gen_ast_type_map;
-mod lib;
+mod util;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

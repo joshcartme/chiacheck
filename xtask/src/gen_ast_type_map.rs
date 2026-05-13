@@ -1,6 +1,6 @@
 //! Generate `fiber/src/metrics/ast_type_map.rs` from `oxc_ast`'s generated `ast_kind.rs`.
 
-use crate::lib::workspace_root;
+use crate::util::workspace_root;
 use anyhow::{Context, Result};
 use cargo_metadata::{Metadata, MetadataCommand, Package};
 use regex::Regex;
