@@ -1,6 +1,6 @@
 use crate::error::FiberError;
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 
@@ -15,7 +15,7 @@ pub(crate) enum AstFeature {
     FileLines(usize),
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct MetricConfig {
     pub name: String,
     #[serde(rename = "type")]
@@ -75,10 +75,20 @@ impl MetricConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DatabaseConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Omitted in TOML → `None`; resolve with `path.as_deref().unwrap_or("fiber.db")` against CWD.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub metrics: Vec<MetricConfig>,
+    pub database: Option<DatabaseConfig>,
 }
 
 pub fn load_config(path: &str) -> Result<Config> {

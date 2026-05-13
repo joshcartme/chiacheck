@@ -1332,3 +1332,111 @@ fn test_run_all_metrics_mixed_ast_non_ast_order() {
     assert_close(results[1].total_penalty, 1.0);
     assert_close(results[2].total_penalty, 3.0);
 }
+
+// --- database integration tests -----------------------------------------------
+
+#[test]
+fn test_db_enabled_false_no_file_created() {
+    use fiber::config::{Config, DatabaseConfig};
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("should_not_exist.db");
+
+    // Build a DatabaseConfig with enabled = false pointing at a path we own.
+    let cfg = Config {
+        metrics: vec![],
+        database: Some(DatabaseConfig {
+            enabled: false,
+            path: Some(db_path.to_string_lossy().to_string()),
+        }),
+    };
+
+    // Predicate: disabled means no file.
+    let should_open = cfg.database.as_ref().is_some_and(|d| d.enabled);
+    assert!(!should_open);
+    assert!(!db_path.exists(), "DB file must not exist when disabled");
+}
+
+#[test]
+fn test_db_omitted_path_defaults_to_fiber_db() {
+    use fiber::config::DatabaseConfig;
+    use fiber::db::resolved_db_path;
+
+    let cfg = DatabaseConfig {
+        enabled: true,
+        path: None,
+    };
+    let resolved = resolved_db_path(&cfg);
+    assert_eq!(resolved.file_name().unwrap(), "fiber.db");
+}
+
+#[test]
+fn test_db_cache_hit_and_miss() {
+    use fiber::db::Db;
+    use fiber::scorer::build_health_score;
+    use tempfile::NamedTempFile;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db = Db::open(tmp.path()).unwrap();
+
+    let sha = "cafebabe00000000";
+    assert!(!db.has_commit(sha).unwrap(), "miss before insert");
+
+    let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
+    db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
+
+    assert!(db.has_commit(sha).unwrap(), "hit after insert");
+    let loaded = db.get_score(sha).unwrap().unwrap();
+    assert_eq!(loaded.commit.as_deref(), Some(sha));
+}
+
+#[test]
+fn test_db_force_overwrites_cached() {
+    use fiber::db::Db;
+    use fiber::scorer::build_health_score;
+    use tempfile::NamedTempFile;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db = Db::open(tmp.path()).unwrap();
+
+    let sha = "0000000000000001";
+    let mut score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
+    score.overall = 5.0;
+    db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
+
+    // Simulate --force by unconditionally upserting again with different value.
+    score.overall = 99.0;
+    db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
+
+    let loaded = db.get_score(sha).unwrap().unwrap();
+    assert_eq!(loaded.overall, 99.0, "--force should overwrite cached row");
+}
+
+#[test]
+fn test_db_get_nonexistent_returns_none() {
+    use fiber::db::Db;
+    use tempfile::NamedTempFile;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db = Db::open(tmp.path()).unwrap();
+    let result = db.get_score("does_not_exist_sha").unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_db_timestamp_column_matches_score() {
+    use fiber::db::Db;
+    use fiber::scorer::build_health_score;
+    use tempfile::NamedTempFile;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db = Db::open(tmp.path()).unwrap();
+    let sha = "timestamp_test_sha";
+    let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
+    let expected_ts = score.timestamp.timestamp();
+    db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
+
+    let loaded = db.get_score(sha).unwrap().unwrap();
+    assert_eq!(loaded.timestamp.timestamp(), expected_ts);
+}

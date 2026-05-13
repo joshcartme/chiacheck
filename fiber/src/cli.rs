@@ -15,7 +15,11 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Calculate health score for the current state
-    Score,
+    Score {
+        /// Skip cache check and overwrite any existing cached score
+        #[arg(long)]
+        force: bool,
+    },
 
     /// Calculate health scores for a range of commits
     Range {
@@ -30,6 +34,10 @@ pub enum Commands {
         /// Output HTML report path
         #[arg(long)]
         output: Option<String>,
+
+        /// Skip cache check and overwrite any existing cached scores
+        #[arg(long)]
+        force: bool,
     },
 
     /// Calculate health scores for a date range
@@ -49,5 +57,9 @@ pub enum Commands {
         /// Output HTML report path
         #[arg(long)]
         output: Option<String>,
+
+        /// Skip cache check and overwrite any existing cached scores
+        #[arg(long)]
+        force: bool,
     },
 }

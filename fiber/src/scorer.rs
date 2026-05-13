@@ -1,9 +1,9 @@
 use crate::metrics::MetricResult;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PenaltyNode {
     pub path: String,
     /// Penalty contributions by metric name. For directory nodes this is the
@@ -22,7 +22,7 @@ impl PenaltyNode {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HealthScore {
     pub overall: f64,
     /// Penalties that could not be attributed to a specific file, keyed by metric name.

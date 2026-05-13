@@ -2,11 +2,17 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use fiber::cli::{Cli, Commands};
-use fiber::config::load_config;
+use fiber::config::{Config, DatabaseConfig, load_config};
+use fiber::db::{Db, resolved_db_path};
 use fiber::git::CommitInfo;
+use fiber::main_helpers::{
+    CachedAction, CreateDbFile, DECLINE_CREATE_DB_MSG, prompt_cached_action,
+    prompt_create_database_file,
+};
 use fiber::metrics::runner::run_all_metrics;
 use fiber::scorer::{HealthScore, build_health_score};
 use fiber::{git, report};
+use std::io::IsTerminal;
 
 fn print_score(score: &HealthScore) {
     let color = if score.overall == 0.0 {
@@ -42,58 +48,46 @@ fn print_score(score: &HealthScore) {
     println!();
 }
 
-/// Load config from `config_path`, run all metrics, and build a [`HealthScore`].
-///
-/// Uses the process working directory (falling back to `"."`) so file globs in
-/// the config resolve relative to where fiber was invoked.
-fn score_config(
-    config_path: &str,
+/// Run all metrics from the already-loaded `config` and build a [`HealthScore`].
+fn score_with_config(
+    config: &Config,
     commit: Option<String>,
     timestamp: DateTime<Utc>,
-) -> Result<HealthScore> {
-    let config = load_config(config_path)?;
+) -> HealthScore {
     let working_dir_buf = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let results = run_all_metrics(&config.metrics, working_dir_buf.as_path());
-    Ok(build_health_score(results, commit, timestamp))
+    build_health_score(results, commit, timestamp)
 }
 
-/// Check out each commit in `commits`, run metrics from `config_path`, then
-/// restore HEAD.  Returns the collected scores in chronological order.
-fn score_commits(commits: &[CommitInfo], config_path: &str) -> Result<Vec<HealthScore>> {
-    let head_ref = git::get_head_ref()?;
-    let mut scores: Vec<HealthScore> = Vec::new();
-    let mut error_occurred = false;
+/// Open the database if `database.enabled == true`. Handles the missing-file prompt.
+/// Returns `None` when the database is disabled, `Some(Db)` when open, or exits the
+/// process (non-zero) if the user declines to create the file.
+fn open_db_if_enabled(database: &Option<DatabaseConfig>) -> Result<Option<Db>> {
+    let cfg = match database {
+        Some(d) if d.enabled => d,
+        _ => return Ok(None),
+    };
 
-    for info in commits {
-        let sha = &info.sha;
-        println!("Checking out {}...", &sha[..sha.len().min(8)]);
-        if let Err(e) = git::checkout_commit(sha) {
-            eprintln!("Warning: could not checkout {}: {}", sha, e);
-            error_occurred = true;
-            continue;
-        }
-        // Do NOT use `?` here – an error must not skip the restore block below.
-        let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
-        match score_config(config_path, Some(sha.clone()), timestamp) {
-            Ok(score) => scores.push(score),
-            Err(e) => {
-                eprintln!("Warning: could not load config at {}: {}", config_path, e);
-                error_occurred = true;
-                continue;
+    let path = resolved_db_path(cfg);
+
+    if !path.exists() {
+        let is_term = std::io::stdin().is_terminal();
+        let mut stdin = std::io::stdin().lock();
+        let mut stdout = std::io::stdout().lock();
+        match prompt_create_database_file(&path, &mut stdin, &mut stdout, is_term)? {
+            CreateDbFile::Yes => {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+            }
+            CreateDbFile::No => {
+                eprintln!("{DECLINE_CREATE_DB_MSG}");
+                std::process::exit(1);
             }
         }
     }
 
-    // Always restore original HEAD, whether on a branch or detached.
-    if let Err(e) = git::restore_head(&head_ref) {
-        eprintln!("Warning: could not restore HEAD to {}: {}", head_ref, e);
-    }
-
-    if error_occurred {
-        eprintln!("Some commits had errors.");
-    }
-
-    Ok(scores)
+    Ok(Some(Db::open(&path)?))
 }
 
 /// Print all scores and optionally write an HTML report.
@@ -108,17 +102,131 @@ fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> 
     Ok(())
 }
 
-fn run_score_command(config_path: &str) -> Result<HealthScore> {
-    score_config(config_path, git::get_current_commit().ok(), Utc::now())
+fn run_score_command(config_path: &str, force: bool) -> Result<()> {
+    let config = load_config(config_path)?;
+    let db = open_db_if_enabled(&config.database)?;
+
+    let commit = git::get_current_commit().ok();
+    let timestamp = Utc::now();
+
+    // Check cache when DB is active, commit is known, and not forcing.
+    if let (Some(db_ref), Some(sha)) = (&db, &commit)
+        && !force
+        && db_ref.has_commit(sha)?
+    {
+        let is_term = std::io::stdin().is_terminal();
+        let mut stdin = std::io::stdin().lock();
+        let mut stdout = std::io::stdout().lock();
+        match prompt_cached_action(sha, &mut stdin, &mut stdout, is_term)? {
+            CachedAction::ShowCached => {
+                if let Some(cached) = db_ref.get_score(sha)? {
+                    print_score(&cached);
+                }
+                return Ok(());
+            }
+            CachedAction::ReRun => {}
+        }
+    }
+
+    let score = score_with_config(&config, commit.clone(), timestamp);
+
+    if let (Some(db_ref), Some(sha)) = (&db, &commit) {
+        db_ref.upsert_score(sha, config_path, &score, &config.metrics)?;
+    }
+
+    print_score(&score);
+    Ok(())
 }
 
-fn run_range_command(from: &str, to: &str, output: Option<&str>, config_path: &str) -> Result<()> {
+/// Check out each commit in `commits`, run metrics, then restore HEAD.
+/// Cached commits (when `db` is `Some` and `!force`) skip checkout entirely.
+fn score_commits(
+    commits: &[CommitInfo],
+    config: &Config,
+    config_path: &str,
+    db: Option<&Db>,
+    force: bool,
+) -> Result<Vec<HealthScore>> {
+    let mut scores: Vec<HealthScore> = Vec::new();
+    let mut error_occurred = false;
+    // Lazily captured on first cache-miss that needs a checkout.
+    let mut head_ref: Option<String> = None;
+    let mut checked_out = false;
+
+    for info in commits {
+        let sha = &info.sha;
+
+        // Cache hit: skip checkout entirely.
+        if let Some(db_ref) = db
+            && !force
+            && db_ref.has_commit(sha)?
+            && let Some(cached) = db_ref.get_score(sha)?
+        {
+            scores.push(cached);
+            continue;
+        }
+
+        // First actual checkout: capture HEAD lazily.
+        if head_ref.is_none() {
+            match git::get_head_ref() {
+                Ok(r) => head_ref = Some(r),
+                Err(e) => {
+                    eprintln!("Warning: could not capture HEAD ref: {e}");
+                    error_occurred = true;
+                    continue;
+                }
+            }
+        }
+
+        println!("Checking out {}...", &sha[..sha.len().min(8)]);
+        if let Err(e) = git::checkout_commit(sha) {
+            eprintln!("Warning: could not checkout {sha}: {e}");
+            error_occurred = true;
+            continue;
+        }
+        checked_out = true;
+
+        let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
+        let score = score_with_config(config, Some(sha.clone()), timestamp);
+        if let Some(db_ref) = db
+            && let Err(e) = db_ref.upsert_score(sha, config_path, &score, &config.metrics)
+        {
+            eprintln!("Warning: could not cache score for {sha}: {e}");
+        }
+        scores.push(score);
+    }
+
+    // Restore HEAD only if we actually checked anything out.
+    if checked_out
+        && let Some(ref hr) = head_ref
+        && let Err(e) = git::restore_head(hr)
+    {
+        eprintln!("Warning: could not restore HEAD to {hr}: {e}");
+    }
+
+    if error_occurred {
+        eprintln!("Some commits had errors.");
+    }
+
+    Ok(scores)
+}
+
+fn run_range_command(
+    from: &str,
+    to: &str,
+    output: Option<&str>,
+    config_path: &str,
+    force: bool,
+) -> Result<()> {
+    let config = load_config(config_path)?;
+    let db = open_db_if_enabled(&config.database)?;
+
     let commits = git::get_commits_in_range(from, to)?;
     if commits.is_empty() {
         println!("No commits found in range {}..{}", from, to);
         return Ok(());
     }
-    let scores = score_commits(&commits, config_path)?;
+    let scores = score_commits(&commits, &config, config_path, db.as_ref(), force)?;
     print_and_report(&scores, output)
 }
 
@@ -128,6 +236,7 @@ fn run_history_command(
     days: Option<u32>,
     output: Option<&str>,
     config_path: &str,
+    force: bool,
 ) -> Result<()> {
     let (from_str, to_str) = if let Some(d) = days {
         let to_date = Utc::now().format("%Y-%m-%d").to_string();
@@ -141,12 +250,15 @@ fn run_history_command(
         (f.to_string(), t.to_string())
     };
 
+    let config = load_config(config_path)?;
+    let db = open_db_if_enabled(&config.database)?;
+
     let commits = git::get_commits_in_date_range(&from_str, &to_str)?;
     if commits.is_empty() {
         println!("No commits found between {} and {}", from_str, to_str);
         return Ok(());
     }
-    let scores = score_commits(&commits, config_path)?;
+    let scores = score_commits(&commits, &config, config_path, db.as_ref(), force)?;
     print_and_report(&scores, output)
 }
 
@@ -154,18 +266,23 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_path = cli.config.as_str();
     match cli.command {
-        Commands::Score => {
-            let score = run_score_command(config_path)?;
-            print_score(&score);
+        Commands::Score { force } => {
+            run_score_command(config_path, force)?;
         }
-        Commands::Range { from, to, output } => {
-            run_range_command(&from, &to, output.as_deref(), config_path)?;
+        Commands::Range {
+            from,
+            to,
+            output,
+            force,
+        } => {
+            run_range_command(&from, &to, output.as_deref(), config_path, force)?;
         }
         Commands::History {
             from,
             to,
             days,
             output,
+            force,
         } => {
             run_history_command(
                 from.as_deref(),
@@ -173,6 +290,7 @@ fn main() -> Result<()> {
                 days,
                 output.as_deref(),
                 config_path,
+                force,
             )?;
         }
     }

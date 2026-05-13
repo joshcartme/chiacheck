@@ -3,6 +3,38 @@
 # Add more [[metrics]] with type = "lint" to run additional linters.
 # Perfect penalty score is 0; higher = more issues found.
 
+# ---------------------------------------------------------------------------
+# Optional database section — omit entirely to disable SQLite caching.
+# When enabled = true, every successful score is persisted in SQLite keyed by
+# commit hash, so repeated runs (fiber score, fiber range, fiber history) can
+# reuse cached results and skip re-running metrics.
+#
+# [database]
+# enabled = true
+#
+# Explicit path (default: fiber.db in the current working directory):
+# [database]
+# enabled = true
+# path = "./fiber.db"
+#
+# Prompts:
+#   • Missing DB file  — fiber asks "(c)reate / (q)uit [q]"; declining exits
+#     with instructions to set enabled = false or remove [database].
+#     In non-interactive environments (is_terminal = false) the prompt short-
+#     circuits to quit immediately without reading stdin.
+#   • Cached commit (fiber score only) — if the current commit already has a
+#     cached score, fiber asks "(s)how cached / (r)e-run [s]"; default is to
+#     show the cached score. Non-interactive: always shows cached.
+#   • fiber range / fiber history — cached commits are silently reused; no
+#     prompt is shown.
+#
+# --force flag — available on all three commands to bypass the cache and always
+# recompute + overwrite:
+#   fiber score --force
+#   fiber range --from SHA --to SHA --force
+#   fiber history --days 30 --force
+# ---------------------------------------------------------------------------
+
 [[metrics]]
 name = "eslint"
 type = "lint"

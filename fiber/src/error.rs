@@ -14,6 +14,15 @@ pub enum FiberError {
     #[error("Report error: {0}")]
     Report(String),
 
+    #[error("Database error: {0}")]
+    Db(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl From<rusqlite::Error> for FiberError {
+    fn from(e: rusqlite::Error) -> Self {
+        FiberError::Db(e.to_string())
+    }
 }
