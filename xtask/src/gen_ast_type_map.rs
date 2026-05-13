@@ -1,5 +1,6 @@
 //! Generate `fiber/src/metrics/ast_type_map.rs` from `oxc_ast`'s generated `ast_kind.rs`.
 
+use crate::lib::workspace_root;
 use anyhow::{Context, Result};
 use cargo_metadata::{Metadata, MetadataCommand, Package};
 use regex::Regex;
@@ -43,13 +44,6 @@ pub fn run() -> Result<()> {
     );
 
     Ok(())
-}
-
-fn workspace_root() -> Result<PathBuf> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .context("xtask crate must live under workspace root")
-        .map(Path::to_path_buf)
 }
 
 fn workspace_metadata(workspace_root: &Path) -> Result<Metadata> {

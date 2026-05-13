@@ -6,6 +6,7 @@
 //! `<RUNS>` times, then does the same for the `main` branch via a temporary git
 //! worktree, and finally prints per-run timings and averages for both branches.
 
+use crate::lib::workspace_root;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -96,13 +97,6 @@ pub fn run(target_dir: PathBuf, runs: usize) -> Result<()> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn workspace_root() -> Result<PathBuf> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .context("xtask crate must live under workspace root")
-        .map(Path::to_path_buf)
-}
 
 fn current_branch_name(dir: &Path) -> Result<String> {
     let out = Command::new("git")
