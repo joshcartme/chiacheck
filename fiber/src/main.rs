@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use fiber::cli::{Cli, Commands};
 use fiber::config::load_config;
@@ -42,17 +42,27 @@ fn print_score(score: &HealthScore) {
     println!();
 }
 
+/// Load config from `config_path`, run all metrics, and build a [`HealthScore`].
+///
+/// Uses the process working directory (falling back to `"."`) so file globs in
+/// the config resolve relative to where fiber was invoked.
+fn score_config(
+    config_path: &str,
+    commit: Option<String>,
+    timestamp: DateTime<Utc>,
+) -> Result<HealthScore> {
+    let config = load_config(config_path)?;
+    let working_dir_buf = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let results = run_all_metrics(&config.metrics, working_dir_buf.as_path());
+    Ok(build_health_score(results, commit, timestamp))
+}
+
 /// Check out each commit in `commits`, run metrics from `config_path`, then
 /// restore HEAD.  Returns the collected scores in chronological order.
 fn score_commits(commits: &[CommitInfo], config_path: &str) -> Result<Vec<HealthScore>> {
     let head_ref = git::get_head_ref()?;
     let mut scores: Vec<HealthScore> = Vec::new();
     let mut error_occurred = false;
-
-    // working_dir is the working directory where fiber was invoked, so that
-    // file globs in the config are resolved relative to the process working directory.
-    let working_dir_buf = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let working_dir = working_dir_buf.as_path();
 
     for info in commits {
         let sha = &info.sha;
@@ -63,18 +73,15 @@ fn score_commits(commits: &[CommitInfo], config_path: &str) -> Result<Vec<Health
             continue;
         }
         // Do NOT use `?` here – an error must not skip the restore block below.
-        let config = match load_config(config_path) {
-            Ok(c) => c,
+        let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
+        match score_config(config_path, Some(sha.clone()), timestamp) {
+            Ok(score) => scores.push(score),
             Err(e) => {
                 eprintln!("Warning: could not load config at {}: {}", config_path, e);
                 error_occurred = true;
                 continue;
             }
-        };
-        let results = run_all_metrics(&config.metrics, working_dir);
-        let timestamp =
-            chrono::DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
-        scores.push(build_health_score(results, Some(sha.clone()), timestamp));
+        }
     }
 
     // Always restore original HEAD, whether on a branch or detached.
@@ -102,15 +109,7 @@ fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> 
 }
 
 fn run_score_command(config_path: &str) -> Result<HealthScore> {
-    let config = load_config(config_path)?;
-    let working_dir_buf = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let working_dir = working_dir_buf.as_path();
-    let results = run_all_metrics(&config.metrics, working_dir);
-    Ok(build_health_score(
-        results,
-        git::get_current_commit().ok(),
-        Utc::now(),
-    ))
+    score_config(config_path, git::get_current_commit().ok(), Utc::now())
 }
 
 fn run_range_command(from: &str, to: &str, output: Option<&str>, config_path: &str) -> Result<()> {
