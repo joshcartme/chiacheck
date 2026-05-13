@@ -44,18 +44,6 @@ impl Db {
         Ok(Db { conn })
     }
 
-    pub fn has_commit(&self, sha: &str) -> Result<bool> {
-        let count: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM scores WHERE commit_hash = ?1",
-                [sha],
-                |row| row.get(0),
-            )
-            .with_context(|| format!("has_commit query failed for {sha}"))?;
-        Ok(count > 0)
-    }
-
     pub fn get_score(&self, sha: &str) -> Result<Option<HealthScore>> {
         let mut stmt = self
             .conn
@@ -175,10 +163,10 @@ mod tests {
         let metrics = sample_metrics();
         let sha = score.commit.as_deref().unwrap();
 
-        assert!(!db.has_commit(sha).unwrap());
+        assert!(db.get_score(sha).unwrap().is_none());
         db.upsert_score(sha, "fiber.toml", &score, &metrics)
             .unwrap();
-        assert!(db.has_commit(sha).unwrap());
+        assert!(db.get_score(sha).unwrap().is_some());
 
         let loaded = db.get_score(sha).unwrap().unwrap();
         assert_eq!(loaded.commit.as_deref(), Some(sha));
