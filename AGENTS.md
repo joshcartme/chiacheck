@@ -34,6 +34,8 @@ cargo clippy --all-targets
 
 - **`cargo xtask check-oxc-version`** — Fails when **`workspace.dependencies.oxc_ast`** in root **`Cargo.toml`** differs between **`HEAD` and the git index** (after `git add`). Also fails when **disk** differs from **`HEAD`** but the index still matches **`HEAD`** (you edited `Cargo.toml` but forgot `git add`). Exits quickly when everything matches (or there is no `HEAD`).
 
+- **`cargo xtask bench <TARGET_DIR> <RUNS>`**: benchmarks performance of the current branch against main
+
 ### Optional git pre-commit hook
 
 To block commits that bump `oxc_ast` without regenerating the map, install:

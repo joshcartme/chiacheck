@@ -22,6 +22,13 @@ This repo is a Cargo **workspace** (`fiber` + `xtask`). Developer automation use
 
 - **`cargo xtask gen-ast-type-map`** — Regenerate `fiber/src/metrics/ast_type_map.rs` after changing the workspace-pinned `oxc_ast` version in the root `Cargo.toml`.
 - **`cargo xtask check-oxc-version`** — Pre-commit helper: fails if staged root `Cargo.toml` changes `workspace.dependencies.oxc_ast` without you addressing the map (see workspace `AGENTS.md` for hook setup).
+- **`cargo xtask bench <TARGET_DIR> <RUNS>`**:
+    1. Builds the current branch with `cargo build --release`
+    2. Times `fiber score` N times in `TARGET_DIR`
+    3. Creates a temporary git worktree for main under `target/\_bench_main_worktree` and builds it
+    4. Times `fiber score` N times on the main binary
+    5. Cleans up the worktree (even on failure)
+    6. Prints per-run timings, averages, and a Δ line showing the difference in seconds and percentage
 
 ---
 
