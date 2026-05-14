@@ -89,12 +89,15 @@ pub struct Config {
     #[serde(default)]
     pub metrics: Vec<MetricConfig>,
     pub database: Option<DatabaseConfig>,
+    /// Path passed to [`load_config`]; not read from TOML.
+    #[serde(skip)]
+    pub path: String,
 }
 
 pub fn load_config(path: &str) -> Result<Config> {
     let content = fs::read_to_string(path)
         .map_err(|e| FiberError::Config(format!("Cannot read {}: {}", path, e)))?;
-    let config: Config = toml::from_str(&content)
+    let mut config: Config = toml::from_str(&content)
         .map_err(|e| FiberError::Config(format!("Invalid TOML in {}: {}", path, e)))?;
 
     let mut seen: HashSet<&str> = HashSet::new();
@@ -114,5 +117,6 @@ pub fn load_config(path: &str) -> Result<Config> {
         .into());
     }
 
+    config.path = path.to_string();
     Ok(config)
 }

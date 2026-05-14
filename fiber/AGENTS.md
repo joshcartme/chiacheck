@@ -12,6 +12,7 @@ Fiber workspace specific guidance. Keep this file terse and agent-focused; targe
 
 ## Repository Map
 
+- `src/main.rs`: CLI entry; parses args, calls `load_config` once, then dispatches. `range` / `history` pass the same `Config` through `score_commits` for every checkout (no per-commit reload).
 - `src/lib.rs`: exposes library modules.
 - `src/cli.rs`: clap definitions; `--config` is `global = true`; default is `fiber.toml`.
 - `src/config.rs`: TOML schema, `MetricConfig`, `AstFeature` / `parse_ast_feature`, duplicate metric-name rejection.
@@ -71,6 +72,7 @@ cargo fiber history --days 30 --output history.html
 
 ## Git Traversal
 
+- Historical runs use the `Config` loaded at process start for every commit; only the working tree changes with each checkout.
 - Before checkout, capture `git::get_head_ref()`.
 - Iterate commits chronological oldest to newest; helpers already reverse `git log`.
 - Inside `score_commits`, do not use `?` in the per-commit loop.

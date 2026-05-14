@@ -55,7 +55,9 @@ fn metric_result(
 
 #[test]
 fn test_config_parsing() {
-    let config = load_config("tests/fixtures/fiber.toml").expect("should parse config");
+    let path = "tests/fixtures/fiber.toml";
+    let config = load_config(path).expect("should parse config");
+    assert_eq!(config.path, path);
     assert_eq!(config.metrics.len(), 2);
     assert_eq!(config.metrics[0].name, "lint");
     assert_eq!(config.metrics[0].metric_type, "count");
@@ -1351,6 +1353,7 @@ fn test_db_enabled_false_no_file_created() {
             enabled: false,
             path: Some(db_path.to_string_lossy().to_string()),
         }),
+        path: String::new(),
     };
 
     let result = open_db_if_enabled(&cfg.database);
@@ -1374,6 +1377,7 @@ fn test_db_decline_non_interactive_returns_error() {
             enabled: true,
             path: Some(db_path.to_string_lossy().to_string()),
         }),
+        path: String::new(),
     };
 
     // `open_db_if_enabled` uses stdin TTY detection, which is often true under

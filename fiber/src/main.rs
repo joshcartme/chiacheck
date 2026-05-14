@@ -68,8 +68,7 @@ fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> 
     Ok(())
 }
 
-fn run_score_command(config_path: &str, force: bool) -> Result<()> {
-    let config = load_config(config_path)?;
+fn run_score_command(config: Config, force: bool) -> Result<()> {
     let db = open_db_if_enabled(&config.database)?;
 
     let commit = git::get_current_commit().ok();
@@ -95,7 +94,7 @@ fn run_score_command(config_path: &str, force: bool) -> Result<()> {
     let score = score_with_config(&config, commit.clone(), timestamp);
 
     if let (Some(db_ref), Some(sha)) = (&db, &commit) {
-        db_ref.upsert_score(sha, config_path, &score, &config.metrics)?;
+        db_ref.upsert_score(sha, &config.path, &score, &config.metrics)?;
     }
 
     print_score(&score);
@@ -104,11 +103,11 @@ fn run_score_command(config_path: &str, force: bool) -> Result<()> {
 
 /// Check out each commit in `commits`, run metrics, then restore HEAD.
 /// Cached commits (when `db` is `Some` and `!force`) skip checkout entirely.
-/// Each checked-out commit is scored against the `fiber.toml` present at that
-/// commit, not the config from the caller's working tree.
+/// Each checkout is scored with the same `config` passed in (loaded once at
+/// CLI startup); the working tree reflects the checked-out commit.
 fn score_commits(
     commits: &[CommitInfo],
-    config_path: &str,
+    config: Config,
     db: Option<&Db>,
     force: bool,
 ) -> Result<Vec<HealthScore>> {
@@ -159,18 +158,10 @@ fn score_commits(
         }
         checked_out = true;
 
-        let config = match load_config(config_path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Warning: could not load {config_path} on {sha}: {e}");
-                error_occurred = true;
-                continue;
-            }
-        };
         let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
         let score = score_with_config(&config, Some(sha.clone()), timestamp);
         if let Some(db_ref) = db
-            && let Err(e) = db_ref.upsert_score(sha, config_path, &score, &config.metrics)
+            && let Err(e) = db_ref.upsert_score(sha, &config.path, &score, &config.metrics)
         {
             eprintln!("Warning: could not cache score for {sha}: {e}");
         }
@@ -196,10 +187,9 @@ fn run_range_command(
     from: &str,
     to: &str,
     output: Option<&str>,
-    config_path: &str,
+    config: Config,
     force: bool,
 ) -> Result<()> {
-    let config = load_config(config_path)?;
     let db = open_db_if_enabled(&config.database)?;
 
     let commits = git::get_commits_in_range(from, to)?;
@@ -207,7 +197,7 @@ fn run_range_command(
         println!("No commits found in range {}..{}", from, to);
         return Ok(());
     }
-    let scores = score_commits(&commits, config_path, db.as_ref(), force)?;
+    let scores = score_commits(&commits, config, db.as_ref(), force)?;
     print_and_report(&scores, output)
 }
 
@@ -216,7 +206,7 @@ fn run_history_command(
     to: Option<&str>,
     days: Option<u32>,
     output: Option<&str>,
-    config_path: &str,
+    config: Config,
     force: bool,
 ) -> Result<()> {
     let (from_str, to_str) = if let Some(d) = days {
@@ -231,7 +221,6 @@ fn run_history_command(
         (f.to_string(), t.to_string())
     };
 
-    let config = load_config(config_path)?;
     let db = open_db_if_enabled(&config.database)?;
 
     let commits = git::get_commits_in_date_range(&from_str, &to_str)?;
@@ -239,16 +228,16 @@ fn run_history_command(
         println!("No commits found between {} and {}", from_str, to_str);
         return Ok(());
     }
-    let scores = score_commits(&commits, config_path, db.as_ref(), force)?;
+    let scores = score_commits(&commits, config, db.as_ref(), force)?;
     print_and_report(&scores, output)
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config_path = cli.config.as_str();
+    let config = load_config(cli.config.as_str())?;
     match cli.command {
         Commands::Score { force } => {
-            run_score_command(config_path, force)?;
+            run_score_command(config, force)?;
         }
         Commands::Range {
             from,
@@ -256,7 +245,7 @@ fn main() -> Result<()> {
             output,
             force,
         } => {
-            run_range_command(&from, &to, output.as_deref(), config_path, force)?;
+            run_range_command(&from, &to, output.as_deref(), config, force)?;
         }
         Commands::History {
             from,
@@ -270,7 +259,7 @@ fn main() -> Result<()> {
                 to.as_deref(),
                 days,
                 output.as_deref(),
-                config_path,
+                config,
                 force,
             )?;
         }

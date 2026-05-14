@@ -268,7 +268,7 @@ Calculate the health score for the current working tree state.
 fiber score [--force]
 ```
 
-Reads `fiber.toml`, runs all metrics, and prints coloured output:
+Uses the configuration loaded at startup (see [Configuration Reference](#configuration-reference)), runs all metrics, and prints coloured output:
 
 ```
 Total Penalty: 3.5  (0 = perfect)
@@ -298,7 +298,7 @@ fiber range --from <SHA> --to <SHA> [--output report.html]
 | `--output` | Optional path to write an HTML report                        |
 | `--force`  | Bypass cache; always recompute and overwrite cached scores   |
 
-Fiber will check out each commit in the git range `from..to`, run metrics, restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
+Fiber will check out each commit in the git range `from..to`, run metrics against that revision of the tree (using the same metric definitions loaded at the start of the run), restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
 
 ```bash
 fiber range --from abc1234 --to def5678 --output report.html
@@ -322,7 +322,7 @@ fiber history [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days N] [--output report.
 | `--output` | Optional path to write an HTML report |
 | `--force`  | Bypass cache; always recompute        |
 
-Use either `--days` or the pair `--from` and `--to`. The date range is passed to git as `--after=<from>` and `--before=<to>`, so it follows git's date parsing and boundary behavior.
+Use either `--days` or the pair `--from` and `--to`. The date range is passed to git as `--after=<from>` and `--before=<to>`, so it follows git's date parsing and boundary behavior. As with `range`, each checkout uses the repository state at that commit while metric definitions stay those from the config Fiber loaded at startup.
 
 ```bash
 # Last 30 days, with HTML output
