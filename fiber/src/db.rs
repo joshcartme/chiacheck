@@ -31,7 +31,6 @@ impl Db {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS scores (
                 commit_hash   TEXT PRIMARY KEY,
-                config_path   TEXT NOT NULL,
                 timestamp     INTEGER NOT NULL,
                 overall       REAL NOT NULL,
                 health_score  TEXT NOT NULL,
@@ -71,7 +70,6 @@ impl Db {
     pub fn upsert_score(
         &self,
         sha: &str,
-        config_path: &str,
         score: &HealthScore,
         metrics: &[MetricConfig],
     ) -> Result<()> {
@@ -83,15 +81,14 @@ impl Db {
 
         self.conn
             .execute(
-                "INSERT INTO scores (commit_hash, config_path, timestamp, overall, health_score, metric_config)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO scores (commit_hash, timestamp, overall, health_score, metric_config)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(commit_hash) DO UPDATE SET
-                     config_path   = excluded.config_path,
                      timestamp     = excluded.timestamp,
                      overall       = excluded.overall,
                      health_score  = excluded.health_score,
                      metric_config = excluded.metric_config",
-                rusqlite::params![sha, config_path, ts, score.overall, health_json, metrics_json],
+                rusqlite::params![sha, ts, score.overall, health_json, metrics_json],
             )
             .with_context(|| format!("upsert_score failed for {sha}"))?;
         Ok(())
@@ -164,8 +161,7 @@ mod tests {
         let sha = score.commit.as_deref().unwrap();
 
         assert!(db.get_score(sha).unwrap().is_none());
-        db.upsert_score(sha, "fiber.toml", &score, &metrics)
-            .unwrap();
+        db.upsert_score(sha, &score, &metrics).unwrap();
         assert!(db.get_score(sha).unwrap().is_some());
 
         let loaded = db.get_score(sha).unwrap().unwrap();
@@ -184,12 +180,10 @@ mod tests {
         let metrics = sample_metrics();
         let sha = score.commit.clone().unwrap();
 
-        db.upsert_score(&sha, "fiber.toml", &score, &metrics)
-            .unwrap();
+        db.upsert_score(&sha, &score, &metrics).unwrap();
         // change overall and upsert again
         score.overall = 99.0;
-        db.upsert_score(&sha, "fiber.toml", &score, &metrics)
-            .unwrap();
+        db.upsert_score(&sha, &score, &metrics).unwrap();
 
         let loaded = db.get_score(&sha).unwrap().unwrap();
         assert_eq!(loaded.overall, 99.0);
@@ -215,8 +209,7 @@ mod tests {
         let metrics = sample_metrics();
         let sha = score.commit.as_deref().unwrap();
 
-        db.upsert_score(sha, "fiber.toml", &score, &metrics)
-            .unwrap();
+        db.upsert_score(sha, &score, &metrics).unwrap();
         let loaded = db.get_score(sha).unwrap().unwrap();
 
         // verify unattributed round-trips
@@ -240,8 +233,7 @@ mod tests {
         let metrics = sample_metrics();
         let sha = score.commit.as_deref().unwrap();
 
-        db.upsert_score(sha, "fiber.toml", &score, &metrics)
-            .unwrap();
+        db.upsert_score(sha, &score, &metrics).unwrap();
 
         // read the raw timestamp column
         let stored_ts: i64 = db

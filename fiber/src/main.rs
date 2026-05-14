@@ -97,7 +97,7 @@ fn run_score_command(config: Config, force: bool) -> Result<()> {
     let score = score_with_config(&config, commit.clone(), timestamp);
 
     if let (Some(db_ref), Some(sha)) = (&db, &commit) {
-        db_ref.upsert_score(sha, &config.path, &score, &config.metrics)?;
+        db_ref.upsert_score(sha, &score, &config.metrics)?;
     }
 
     print_score(&score);
@@ -164,7 +164,7 @@ fn score_commits(
         let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
         let score = score_with_config(&config, Some(sha.clone()), timestamp);
         if let Some(db_ref) = db
-            && let Err(e) = db_ref.upsert_score(sha, &config.path, &score, &config.metrics)
+            && let Err(e) = db_ref.upsert_score(sha, &score, &config.metrics)
         {
             eprintln!("Warning: could not cache score for {sha}: {e}");
         }

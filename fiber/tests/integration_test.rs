@@ -1418,7 +1418,7 @@ fn test_db_cache_hit_and_miss() {
     assert!(db.get_score(sha).unwrap().is_none(), "miss before insert");
 
     let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
-    db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
+    db.upsert_score(sha, &score, &[]).unwrap();
 
     let loaded = db.get_score(sha).unwrap().unwrap();
     assert_eq!(loaded.commit.as_deref(), Some(sha), "hit after insert");
@@ -1436,11 +1436,11 @@ fn test_db_force_overwrites_cached() {
     let sha = "0000000000000001";
     let mut score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
     score.overall = 5.0;
-    db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
+    db.upsert_score(sha, &score, &[]).unwrap();
 
     // Simulate --force by unconditionally upserting again with different value.
     score.overall = 99.0;
-    db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
+    db.upsert_score(sha, &score, &[]).unwrap();
 
     let loaded = db.get_score(sha).unwrap().unwrap();
     assert_eq!(loaded.overall, 99.0, "--force should overwrite cached row");
@@ -1468,7 +1468,7 @@ fn test_db_timestamp_column_matches_score() {
     let sha = "timestamp_test_sha";
     let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
     let expected_ts = score.timestamp.timestamp();
-    db.upsert_score(sha, "fiber.toml", &score, &[]).unwrap();
+    db.upsert_score(sha, &score, &[]).unwrap();
 
     let loaded = db.get_score(sha).unwrap().unwrap();
     assert_eq!(loaded.timestamp.timestamp(), expected_ts);
