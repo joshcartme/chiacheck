@@ -40,7 +40,7 @@ impl Db {
             anyhow::bail!("SQLite journal_mode is '{mode}', expected 'wal'");
         }
 
-        Migrations::new(MIGRATIONS_SLICE.to_vec())
+        Migrations::from_slice(MIGRATIONS_SLICE)
             .to_latest(&mut conn)
             .with_context(|| "Failed to apply database migrations")?;
 
@@ -115,11 +115,7 @@ mod tests {
 
     #[test]
     fn migrations_are_valid() {
-        assert!(
-            Migrations::new(MIGRATIONS_SLICE.to_vec())
-                .validate()
-                .is_ok()
-        );
+        assert!(Migrations::from_slice(MIGRATIONS_SLICE).validate().is_ok());
     }
 
     fn sample_score() -> HealthScore {
