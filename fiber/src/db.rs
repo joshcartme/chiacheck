@@ -2,7 +2,19 @@ use crate::config::{DatabaseConfig, MetricConfig};
 use crate::scorer::HealthScore;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use rusqlite_migration::{M, Migrations};
 use std::path::{Path, PathBuf};
+
+const MIGRATIONS_SLICE: &[M<'_>] = &[M::up(
+    "CREATE TABLE scores (
+        commit_hash   TEXT PRIMARY KEY,
+        timestamp     INTEGER NOT NULL,
+        overall       REAL NOT NULL,
+        health_score  TEXT NOT NULL,
+        metric_config TEXT NOT NULL,
+        created_at    INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );",
+)];
 
 pub struct Db {
     conn: Connection,
@@ -12,33 +24,25 @@ impl Db {
     /// Opens (or creates) the SQLite file at `path`.
     /// Caller must only invoke after the user has approved creating a missing file.
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path)
+        let mut conn = Connection::open(path)
             .with_context(|| format!("Failed to open database at {}", path.display()))?;
 
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA busy_timeout=1000;",
-        )
-        .with_context(|| "Failed to set SQLite pragmas")?;
+        // WAL and busy-timeout are connection-level settings; apply before migrations.
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .with_context(|| "Failed to set journal_mode=WAL")?;
+        conn.pragma_update(None, "busy_timeout", 1000)
+            .with_context(|| "Failed to set busy_timeout")?;
 
         let mode: String = conn
-            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .with_context(|| "Failed to read journal_mode")?;
         if mode != "wal" {
             anyhow::bail!("SQLite journal_mode is '{mode}', expected 'wal'");
         }
 
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS scores (
-                commit_hash   TEXT PRIMARY KEY,
-                timestamp     INTEGER NOT NULL,
-                overall       REAL NOT NULL,
-                health_score  TEXT NOT NULL,
-                metric_config TEXT NOT NULL,
-                created_at    INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-            );",
-        )
-        .with_context(|| "Failed to create scores table")?;
+        Migrations::new(MIGRATIONS_SLICE.to_vec())
+            .to_latest(&mut conn)
+            .with_context(|| "Failed to apply database migrations")?;
 
         Ok(Db { conn })
     }
@@ -108,6 +112,15 @@ mod tests {
     use crate::scorer::{PenaltyNode, build_health_score};
     use chrono::Utc;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn migrations_are_valid() {
+        assert!(
+            Migrations::new(MIGRATIONS_SLICE.to_vec())
+                .validate()
+                .is_ok()
+        );
+    }
 
     fn sample_score() -> HealthScore {
         let result = MetricResult {
