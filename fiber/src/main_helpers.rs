@@ -14,6 +14,46 @@ pub enum CachedAction {
     ReRun,
 }
 
+pub enum DirtyWorktreeStashChoice {
+    Stash,
+    Proceed,
+}
+
+/// When the working tree differs from `HEAD`, ask whether to stash before commands
+/// that may check out other commits.
+///
+/// When `is_terminal` is `false`, returns [`DirtyWorktreeStashChoice::Proceed`] without
+/// reading stdin (CI / scripts).
+pub fn prompt_stash_dirty_worktree<R: BufRead, W: Write>(
+    stdin: &mut R,
+    stdout: &mut W,
+    is_terminal: bool,
+) -> Result<DirtyWorktreeStashChoice> {
+    if !is_terminal {
+        return Ok(DirtyWorktreeStashChoice::Proceed);
+    }
+
+    writeln!(
+        stdout,
+        "Working tree has uncommitted changes (per `git diff --quiet HEAD`)."
+    )?;
+    write!(
+        stdout,
+        "Stash them temporarily before running? (y)es / (n)o [n]: "
+    )?;
+    stdout.flush()?;
+
+    let mut line = String::new();
+    stdin.read_line(&mut line)?;
+    let trimmed = line.trim().to_lowercase();
+
+    if trimmed == "y" || trimmed == "yes" {
+        Ok(DirtyWorktreeStashChoice::Stash)
+    } else {
+        Ok(DirtyWorktreeStashChoice::Proceed)
+    }
+}
+
 /// Prompts the user to create the missing database file.
 ///
 /// When `is_terminal` is `false`, returns `No` immediately without reading stdin
@@ -123,4 +163,35 @@ pub fn open_db_if_enabled_interactive(
     }
 
     Ok(Some(Db::open(&path)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DirtyWorktreeStashChoice, prompt_stash_dirty_worktree};
+    use std::io::Cursor;
+
+    #[test]
+    fn prompt_stash_dirty_worktree_non_terminal_skips_read() {
+        let mut stdin = Cursor::new(b"y\n");
+        let mut stdout = Vec::new();
+        let result = prompt_stash_dirty_worktree(&mut stdin, &mut stdout, false).unwrap();
+        assert!(matches!(result, DirtyWorktreeStashChoice::Proceed));
+        assert_eq!(stdin.position(), 0);
+    }
+
+    #[test]
+    fn prompt_stash_dirty_worktree_terminal_yes() {
+        let mut stdin = Cursor::new(b"y\n");
+        let mut stdout = Vec::new();
+        let result = prompt_stash_dirty_worktree(&mut stdin, &mut stdout, true).unwrap();
+        assert!(matches!(result, DirtyWorktreeStashChoice::Stash));
+    }
+
+    #[test]
+    fn prompt_stash_dirty_worktree_terminal_default_no() {
+        let mut stdin = Cursor::new(b"\n");
+        let mut stdout = Vec::new();
+        let result = prompt_stash_dirty_worktree(&mut stdin, &mut stdout, true).unwrap();
+        assert!(matches!(result, DirtyWorktreeStashChoice::Proceed));
+    }
 }

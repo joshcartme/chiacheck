@@ -44,6 +44,40 @@ fn run_git_status(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// `true` when the index or tracked working tree differs from `HEAD`, matching
+/// a non-zero exit from `git diff --quiet HEAD`.
+pub fn is_head_diff_dirty() -> Result<bool> {
+    let output = Command::new("git")
+        .args(["diff", "--quiet", "HEAD"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| FiberError::Git(format!("Failed to run git: {}", e)))?;
+
+    if output.status.success() {
+        return Ok(false);
+    }
+    if output.status.code() == Some(1) {
+        return Ok(true);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(FiberError::Git(format!("git diff --quiet HEAD failed: {}", stderr.trim())).into())
+}
+
+pub fn stash_push_before_command() -> Result<()> {
+    run_git_status(&[
+        "stash",
+        "push",
+        "-m",
+        "fiber: temporary stash before command",
+    ])
+}
+
+pub fn stash_pop() -> Result<()> {
+    run_git_status(&["stash", "pop"])
+}
+
 /// Parse `git log --pretty=format:%H%x09%ct` output into CommitInfo values.
 fn parse_commit_info_lines(output: &str) -> Result<Vec<CommitInfo>> {
     let mut commits = Vec::new();

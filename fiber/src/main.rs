@@ -5,7 +5,10 @@ use fiber::cli::{Cli, Commands};
 use fiber::config::{Config, load_config};
 use fiber::db::Db;
 use fiber::git::CommitInfo;
-use fiber::main_helpers::{CachedAction, open_db_if_enabled, prompt_cached_action};
+use fiber::main_helpers::{
+    CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled, prompt_cached_action,
+    prompt_stash_dirty_worktree,
+};
 use fiber::metrics::runner::run_all_metrics;
 use fiber::scorer::{HealthScore, build_health_score};
 use fiber::{git, report};
@@ -235,34 +238,64 @@ fn run_history_command(
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = load_config(cli.config.as_str())?;
-    match cli.command {
-        Commands::Score { force } => {
-            run_score_command(config, force)?;
-        }
-        Commands::Range {
-            from,
-            to,
-            output,
-            force,
-        } => {
-            run_range_command(&from, &to, output.as_deref(), config, force)?;
-        }
-        Commands::History {
-            from,
-            to,
-            days,
-            output,
-            force,
-        } => {
-            run_history_command(
-                from.as_deref(),
-                to.as_deref(),
-                days,
-                output.as_deref(),
-                config,
-                force,
-            )?;
+
+    let mut stashed_for_dirty_tree = false;
+    if git::is_head_diff_dirty()? {
+        let is_term = std::io::stdin().is_terminal();
+        let mut stdin = std::io::stdin().lock();
+        let mut stdout = std::io::stdout().lock();
+        if matches!(
+            prompt_stash_dirty_worktree(&mut stdin, &mut stdout, is_term)?,
+            DirtyWorktreeStashChoice::Stash
+        ) {
+            git::stash_push_before_command()?;
+            stashed_for_dirty_tree = true;
         }
     }
-    Ok(())
+
+    let cmd_result = (|| -> Result<()> {
+        match cli.command {
+            Commands::Score { force } => {
+                run_score_command(config, force)?;
+            }
+            Commands::Range {
+                from,
+                to,
+                output,
+                force,
+            } => {
+                run_range_command(&from, &to, output.as_deref(), config, force)?;
+            }
+            Commands::History {
+                from,
+                to,
+                days,
+                output,
+                force,
+            } => {
+                run_history_command(
+                    from.as_deref(),
+                    to.as_deref(),
+                    days,
+                    output.as_deref(),
+                    config,
+                    force,
+                )?;
+            }
+        }
+        Ok(())
+    })();
+
+    if stashed_for_dirty_tree {
+        match (cmd_result, git::stash_pop()) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(e), Ok(())) => Err(e),
+            (Ok(()), Err(pop_err)) => Err(pop_err),
+            (Err(cmd_err), Err(pop_err)) => {
+                Err(cmd_err.context(format!("`git stash pop` also failed: {pop_err}")))
+            }
+        }
+    } else {
+        cmd_result
+    }
 }
