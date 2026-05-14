@@ -365,7 +365,7 @@ Database file fiber.db does not exist. (c)reate it / (q)uit [q]:
 
 - **Accept (`c`)** — Fiber creates the file (and any parent directories) then continues.
 - **Decline or empty line (`q`)** — Fiber exits non-zero with instructions: set `enabled = false` under `[database]` or remove the `[database]` section entirely.
-- **Non-interactive stdin** (piped input, CI) — Fiber immediately treats this as a decline and exits non-zero without reading stdin.
+- **Non-interactive stdin** (when stdin is not a TTY) — Fiber immediately treats this as a decline and exits non-zero without reading stdin.
 
 ### Cache behavior per command
 
