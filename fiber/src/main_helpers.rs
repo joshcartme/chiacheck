@@ -130,14 +130,19 @@ pub const DECLINE_CREATE_DB_MSG: &str = "Fiber is configured to use a database b
 /// tests should call [`open_db_if_enabled_interactive`] with `is_terminal: false`
 /// instead.
 pub fn open_db_if_enabled(database: &Option<DatabaseConfig>) -> Result<Option<Db>> {
-    open_db_if_enabled_interactive(database, std::io::stdin().is_terminal())
+    let is_terminal = std::io::stdin().is_terminal();
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    open_db_if_enabled_interactive(database, &mut stdin, &mut stdout, is_terminal)
 }
 
-/// Like [`open_db_if_enabled`], but the caller supplies whether stdin should be treated
-/// as an interactive TTY for the missing-database prompt. When `is_terminal` is `false`,
-/// the prompt is skipped and [`DECLINE_CREATE_DB_MSG`] is returned if the file is absent.
-pub fn open_db_if_enabled_interactive(
+/// Like [`open_db_if_enabled`], but the caller supplies IO handles and whether stdin
+/// should be treated as an interactive TTY. When `is_terminal` is `false`, the prompt
+/// is skipped and [`DECLINE_CREATE_DB_MSG`] is returned if the file is absent.
+pub fn open_db_if_enabled_interactive<R: BufRead, W: Write>(
     database: &Option<DatabaseConfig>,
+    stdin: &mut R,
+    stdout: &mut W,
     is_terminal: bool,
 ) -> Result<Option<Db>> {
     let cfg = match database {
@@ -148,9 +153,7 @@ pub fn open_db_if_enabled_interactive(
     let path = resolved_db_path(cfg);
 
     if !path.exists() {
-        let mut stdin = std::io::stdin().lock();
-        let mut stdout = std::io::stdout().lock();
-        match prompt_create_database_file(&path, &mut stdin, &mut stdout, is_terminal)? {
+        match prompt_create_database_file(&path, stdin, stdout, is_terminal)? {
             CreateDbFile::Yes => {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;

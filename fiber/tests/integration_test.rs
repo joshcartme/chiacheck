@@ -1366,6 +1366,7 @@ fn test_db_enabled_false_no_file_created() {
 fn test_db_decline_non_interactive_returns_error() {
     use fiber::config::{Config, DatabaseConfig};
     use fiber::main_helpers::{DECLINE_CREATE_DB_MSG, open_db_if_enabled_interactive};
+    use std::io::Cursor;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -1382,7 +1383,13 @@ fn test_db_decline_non_interactive_returns_error() {
 
     // `open_db_if_enabled` uses stdin TTY detection, which is often true under
     // `cargo test` in a normal terminal. Force non-interactive so we never read stdin.
-    let result = open_db_if_enabled_interactive(&cfg.database, false).map(|_| ());
+    let result = open_db_if_enabled_interactive(
+        &cfg.database,
+        &mut Cursor::new(b""),
+        &mut Vec::new(),
+        false,
+    )
+    .map(|_| ());
     assert!(result.is_err(), "expected error when declining DB creation");
     let msg = format!("{}", result.unwrap_err());
     assert!(

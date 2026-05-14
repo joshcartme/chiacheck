@@ -6,8 +6,8 @@ use fiber::config::{Config, load_config};
 use fiber::db::Db;
 use fiber::git::CommitInfo;
 use fiber::main_helpers::{
-    CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled, prompt_cached_action,
-    prompt_stash_dirty_worktree,
+    CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled, open_db_if_enabled_interactive,
+    prompt_cached_action, prompt_stash_dirty_worktree,
 };
 use fiber::metrics::runner::run_all_metrics;
 use fiber::scorer::{HealthScore, build_health_score};
@@ -72,7 +72,10 @@ fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> 
 }
 
 fn run_score_command(config: Config, force: bool) -> Result<()> {
-    let db = open_db_if_enabled(&config.database)?;
+    let is_term = std::io::stdin().is_terminal();
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    let db = open_db_if_enabled_interactive(&config.database, &mut stdin, &mut stdout, is_term)?;
 
     let commit = git::get_current_commit().ok();
     let timestamp = Utc::now();
@@ -82,9 +85,6 @@ fn run_score_command(config: Config, force: bool) -> Result<()> {
         && !force
         && let Some(cached) = db_ref.get_score(sha)?
     {
-        let is_term = std::io::stdin().is_terminal();
-        let mut stdin = std::io::stdin().lock();
-        let mut stdout = std::io::stdout().lock();
         match prompt_cached_action(sha, &mut stdin, &mut stdout, is_term)? {
             CachedAction::ShowCached => {
                 print_score(&cached);
