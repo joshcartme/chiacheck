@@ -5,7 +5,7 @@ use fiber::config::{MetricConfig, load_config};
 use fiber::metrics::MetricResult;
 use fiber::metrics::runner::{run_all_metrics, run_metric};
 use fiber::scorer::build_health_score;
-use std::path::{Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 use tempfile::TempDir;
 
 fn metric_config(name: &str, metric_type: &str, command: Option<&str>) -> MetricConfig {
@@ -57,7 +57,10 @@ fn metric_result(
 fn test_config_parsing() {
     let path = "tests/fixtures/fiber.toml";
     let config = load_config(path).expect("should parse config");
-    assert_eq!(config.path, path);
+    assert_eq!(
+        config.path,
+        path::absolute(path).expect("should resolve path")
+    );
     assert_eq!(config.metrics.len(), 2);
     assert_eq!(config.metrics[0].name, "lint");
     assert_eq!(config.metrics[0].metric_type, "count");
@@ -1353,7 +1356,7 @@ fn test_db_enabled_false_no_file_created() {
             enabled: false,
             path: Some(db_path.to_string_lossy().to_string()),
         }),
-        path: String::new(),
+        path: PathBuf::new(),
     };
 
     let result = open_db_if_enabled(&cfg.database);
@@ -1378,7 +1381,7 @@ fn test_db_decline_non_interactive_returns_error() {
             enabled: true,
             path: Some(db_path.to_string_lossy().to_string()),
         }),
-        path: String::new(),
+        path: PathBuf::new(),
     };
 
     // `open_db_if_enabled` uses stdin TTY detection, which is often true under

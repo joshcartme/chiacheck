@@ -17,7 +17,7 @@ Fiber workspace specific guidance. Keep this file terse and agent-focused; targe
 - `src/db.rs`: SQLite score cache (`get_score` / `upsert_score`; key is `(commit_hash, config_path)`).
 - `src/lib.rs`: exposes library modules.
 - `src/cli.rs`: clap definitions; `--config` is `global = true`; default is `fiber.toml`.
-- `src/config.rs`: TOML schema, `MetricConfig`, `AstFeature` / `parse_ast_feature`, duplicate metric-name rejection.
+- `src/config.rs`: TOML schema, `MetricConfig`, `AstFeature` / `parse_ast_feature`, duplicate metric-name rejection; `load_config` stores absolutized `Config.path`; `Config::repo_relative_config_path` for DB cache keys.
 - `src/error.rs`: `FiberError`.
 - `src/git.rs`: git wrappers plus commit/date range traversal.
 - `src/metrics/mod.rs`: `MetricResult`.
@@ -74,7 +74,7 @@ cargo fiber history --days 30 --output history.html
 
 ## Git Traversal
 
-- `score_commits` owns DB I/O and cache UX: `open_db_if_enabled_interactive`, then unless `--force` one `prompt_cached_action` (`(u)se db` / clean `(r)un`; non-TTY defaults to use DB). `repo_relative_config_path` supplies the cache key; `use_cache` gates per-commit `get_score(sha, config_path)`; misses checkout, score, `upsert_score`.
+- `score_commits` owns DB I/O and cache UX: `open_db_if_enabled_interactive`, then unless `--force` one `prompt_cached_action` (`(u)se db` / clean `(r)un`; non-TTY defaults to use DB). When the DB is open, `config.repo_relative_config_path()?` supplies the cache key; `use_cache` gates per-commit `get_score(sha, config_path)`; misses checkout, score, `upsert_score`.
 - Historical runs use the `Config` loaded at process start for every commit; only the working tree changes with each checkout. Timestamps come from `CommitInfo.timestamp_unix`.
 - Before checkout, capture `git::get_head_ref()` (lazy, first cache miss that needs checkout). Single-commit at current `HEAD` (`rev-parse HEAD` matches) skip checkout and restore.
 - Iterate commits chronological oldest to newest; helpers already reverse `git log`.

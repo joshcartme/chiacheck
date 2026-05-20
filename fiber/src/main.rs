@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use fiber::cli::{Cli, Commands};
-use fiber::config::{Config, load_config, repo_relative_config_path};
+use fiber::config::{Config, load_config};
 use fiber::git::CommitInfo;
 use fiber::main_helpers::{
     CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled_interactive, prompt_cached_action,
@@ -112,7 +112,7 @@ fn score_commits(commits: &[CommitInfo], config: Config, force: bool) -> Result<
         );
 
     let config_path_key = if db.is_some() {
-        Some(repo_relative_config_path(&config.path)?)
+        Some(config.repo_relative_config_path()?)
     } else {
         None
     };
