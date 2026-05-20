@@ -310,7 +310,7 @@ mod tests {
         let mut stdin = Cursor::new(b"r\n");
         let mut stdout = Vec::new();
         // is_terminal = false → ShowCached immediately, no stdin read
-        let result = prompt_cached_action("abc123", &mut stdin, &mut stdout, false).unwrap();
+        let result = prompt_cached_action(&mut stdin, &mut stdout, false).unwrap();
         assert!(matches!(result, CachedAction::ShowCached));
         assert_eq!(stdin.position(), 0);
     }
@@ -322,7 +322,7 @@ mod tests {
 
         let mut stdin = Cursor::new(b"r\n");
         let mut stdout = Vec::new();
-        let result = prompt_cached_action("abc123", &mut stdin, &mut stdout, true).unwrap();
+        let result = prompt_cached_action(&mut stdin, &mut stdout, true).unwrap();
         assert!(matches!(result, CachedAction::ReRun));
     }
 
@@ -334,7 +334,7 @@ mod tests {
         // empty line → default ShowCached
         let mut stdin = Cursor::new(b"\n");
         let mut stdout = Vec::new();
-        let result = prompt_cached_action("abc123", &mut stdin, &mut stdout, true).unwrap();
+        let result = prompt_cached_action(&mut stdin, &mut stdout, true).unwrap();
         assert!(matches!(result, CachedAction::ShowCached));
     }
 }

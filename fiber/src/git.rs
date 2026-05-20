@@ -150,6 +150,16 @@ pub fn get_current_commit() -> Result<String> {
     Ok(run_git(&["rev-parse", "HEAD"], None)?.unwrap())
 }
 
+/// Current `HEAD` as [`CommitInfo`] (SHA and committer timestamp from `git log -1`).
+pub fn get_current_commit_info() -> Result<CommitInfo> {
+    let output = run_git(&["log", "-1", "--pretty=format:%H%x09%ct"], None)?.unwrap();
+    let commits = parse_commit_info_lines(&output)?;
+    commits
+        .into_iter()
+        .next()
+        .ok_or_else(|| FiberError::Git("git log -1 returned no commits".to_string()).into())
+}
+
 /// Returns the current branch name if HEAD is on a branch, or the commit SHA
 /// if HEAD is detached.  Always use this (not `get_current_commit`) before a
 /// traversal so that `restore_head` can return to the branch afterwards.

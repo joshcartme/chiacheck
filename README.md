@@ -262,13 +262,19 @@ error_penalty = 1.0
 
 ### `fiber score`
 
-Calculate the health score for the current working tree state.
+Calculate the health score for the current `HEAD` commit.
 
 ```bash
 fiber score [--force]
 ```
 
-Uses the configuration loaded at startup (see [Configuration Reference](#configuration-reference)), runs all metrics, and prints coloured output:
+| Flag       | Description                                                  |
+| ---------- | ------------------------------------------------------------ |
+| `--force`  | Bypass cache; always recompute and overwrite cached scores   |
+
+Uses the configuration loaded at startup (see [Configuration Reference](#configuration-reference)), resolves `HEAD` via `git log -1` (SHA and commit timestamp), runs all metrics, and prints coloured output. With the [SQLite score cache](#sqlite-score-cache) enabled, behavior matches `range` / `history`: Fiber may reuse a cached row or check out `HEAD` to score, then restore your previous branch or detached state. Outside a git repository, Fiber scores the working tree once with no commit SHA and does not use the database.
+
+Example output:
 
 ```
 Total Penalty: 3.5  (0 = perfect)
@@ -367,13 +373,19 @@ Database file fiber.db does not exist. (c)reate it / (q)uit [q]:
 - **Decline or empty line (`q`)** — Fiber exits non-zero with instructions: set `enabled = false` under `[database]` or remove the `[database]` section entirely.
 - **Non-interactive stdin** (when stdin is not a TTY) — Fiber immediately treats this as a decline and exits non-zero without reading stdin.
 
-### Cache behavior per command
+### Cache lookup prompt
 
-| Command         | Cache hit behavior                                                         |
-| --------------- | -------------------------------------------------------------------------- |
-| `fiber score`   | Prompts `(s)how cached / (r)e-run [s]`; non-interactive shows cached.     |
-| `fiber range`   | Silently reuses cached commits; uncached commits are checked out and run.  |
-| `fiber history` | Silently reuses cached commits; uncached commits are checked out and run.  |
+When the database is enabled and `--force` is not set, `score`, `range`, and `history` all ask **once** before scoring:
+
+```
+Look up scores in the database, or run fresh? (u)se db / clean (r)un [u]:
+```
+
+- **Use db (default, `u`, or empty line)** — For each commit, use a cached score when present (no checkout or metric run). Commits without a cache entry are checked out, scored, and stored.
+- **Clean run (`r`)** — Ignore cached rows for this run; every commit is checked out and scored fresh. New results are still written to the database when scoring completes.
+- **Non-interactive stdin** (not a TTY) — Treated as **use db** without reading stdin.
+
+`fiber score` applies this to the single `HEAD` commit; `range` and `history` apply it across every commit in the requested range.
 
 ### `--force` flag
 

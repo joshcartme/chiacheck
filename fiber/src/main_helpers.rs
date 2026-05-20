@@ -86,11 +86,10 @@ pub fn prompt_create_database_file<R: BufRead, W: Write>(
     }
 }
 
-/// Prompts the user what to do when the current commit already has a cached score.
+/// Prompts whether to read cached scores from the database or run metrics fresh.
 ///
 /// When `is_terminal` is `false`, returns `ShowCached` immediately without reading stdin.
 pub fn prompt_cached_action<R: BufRead, W: Write>(
-    sha: &str,
     stdin: &mut R,
     stdout: &mut W,
     is_terminal: bool,
@@ -99,10 +98,9 @@ pub fn prompt_cached_action<R: BufRead, W: Write>(
         return Ok(CachedAction::ShowCached);
     }
 
-    let short = &sha[..sha.len().min(12)];
     write!(
         stdout,
-        "Commit {short}: cached score found. (s)how cached / (r)e-run [s]: "
+        "Look up scores in the database, or run fresh? (u)se db / clean (r)un [u]: "
     )?;
     stdout.flush()?;
 
@@ -110,7 +108,7 @@ pub fn prompt_cached_action<R: BufRead, W: Write>(
     stdin.read_line(&mut line)?;
     let trimmed = line.trim().to_lowercase();
 
-    if trimmed == "r" || trimmed == "re-run" || trimmed == "rerun" {
+    if trimmed == "r" || trimmed == "re-run" || trimmed == "rerun" || trimmed == "run" {
         Ok(CachedAction::ReRun)
     } else {
         Ok(CachedAction::ShowCached)

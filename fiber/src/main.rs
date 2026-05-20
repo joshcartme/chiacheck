@@ -3,11 +3,10 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use fiber::cli::{Cli, Commands};
 use fiber::config::{Config, load_config};
-use fiber::db::Db;
 use fiber::git::CommitInfo;
 use fiber::main_helpers::{
-    CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled, open_db_if_enabled_interactive,
-    prompt_cached_action, prompt_stash_dirty_worktree,
+    CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled_interactive, prompt_cached_action,
+    prompt_stash_dirty_worktree,
 };
 use fiber::metrics::runner::run_all_metrics;
 use fiber::scorer::{HealthScore, build_health_score};
@@ -72,48 +71,35 @@ fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> 
 }
 
 fn run_score_command(config: Config, force: bool) -> Result<()> {
-    let is_term = std::io::stdin().is_terminal();
-    let mut stdin = std::io::stdin().lock();
-    let mut stdout = std::io::stdout().lock();
-    let db = open_db_if_enabled_interactive(&config.database, &mut stdin, &mut stdout, is_term)?;
+    // if not in a git repo still run the score command
+    let Some(commit) = git::get_current_commit_info().ok() else {
+        let score = score_with_config(&config, None, Utc::now());
+        print_score(&score);
+        return Ok(());
+    };
 
-    let commit = git::get_current_commit().ok();
-    let timestamp = Utc::now();
-
-    // Check cache when DB is active, commit is known, and not forcing.
-    if let (Some(db_ref), Some(sha)) = (&db, &commit)
-        && !force
-        && let Some(cached) = db_ref.get_score(sha)?
-    {
-        match prompt_cached_action(sha, &mut stdin, &mut stdout, is_term)? {
-            CachedAction::ShowCached => {
-                print_score(&cached);
-                return Ok(());
-            }
-            CachedAction::ReRun => {}
-        }
-    }
-
-    let score = score_with_config(&config, commit.clone(), timestamp);
-
-    if let (Some(db_ref), Some(sha)) = (&db, &commit) {
-        db_ref.upsert_score(sha, &score, &config.metrics)?;
-    }
-
-    print_score(&score);
-    Ok(())
+    let scores = score_commits(&[commit], config, force)?;
+    print_and_report(&scores, None)
 }
 
-/// Check out each commit in `commits`, run metrics, then restore HEAD.
-/// Cached commits (when `db` is `Some` and `!force`) skip checkout entirely.
-/// Each checkout is scored with the same `config` passed in (loaded once at
+/// Open the database when enabled, check out each commit in `commits`, run metrics,
+/// then restore HEAD. Cached commits (when the user chose cached scores) skip checkout
+/// entirely. Each checkout is scored with the same `config` passed in (loaded once at
 /// CLI startup); the working tree reflects the checked-out commit.
-fn score_commits(
-    commits: &[CommitInfo],
-    config: Config,
-    db: Option<&Db>,
-    force: bool,
-) -> Result<Vec<HealthScore>> {
+fn score_commits(commits: &[CommitInfo], config: Config, force: bool) -> Result<Vec<HealthScore>> {
+    let is_terminal = std::io::stdin().is_terminal();
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    let db =
+        open_db_if_enabled_interactive(&config.database, &mut stdin, &mut stdout, is_terminal)?;
+
+    let use_cache = !force
+        && db.is_some()
+        && matches!(
+            prompt_cached_action(&mut stdin, &mut stdout, is_terminal)?,
+            CachedAction::ShowCached
+        );
+
     let mut scores: Vec<HealthScore> = Vec::new();
     let mut error_occurred = false;
     // Lazily captured on first cache-miss that needs a checkout.
@@ -125,8 +111,8 @@ fn score_commits(
         let sha = &info.sha;
 
         // Cache hit: skip checkout entirely.
-        if let Some(db_ref) = db
-            && !force
+        if let Some(ref db_ref) = db
+            && use_cache
         {
             match db_ref.get_score(sha) {
                 Ok(Some(cached)) => {
@@ -163,7 +149,7 @@ fn score_commits(
 
         let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
         let score = score_with_config(&config, Some(sha.clone()), timestamp);
-        if let Some(db_ref) = db
+        if let Some(ref db_ref) = db
             && let Err(e) = db_ref.upsert_score(sha, &score, &config.metrics)
         {
             eprintln!("Warning: could not cache score for {sha}: {e}");
@@ -193,14 +179,12 @@ fn run_range_command(
     config: Config,
     force: bool,
 ) -> Result<()> {
-    let db = open_db_if_enabled(&config.database)?;
-
     let commits = git::get_commits_in_range(from, to)?;
     if commits.is_empty() {
         println!("No commits found in range {}..{}", from, to);
         return Ok(());
     }
-    let scores = score_commits(&commits, config, db.as_ref(), force)?;
+    let scores = score_commits(&commits, config, force)?;
     print_and_report(&scores, output)
 }
 
@@ -224,14 +208,12 @@ fn run_history_command(
         (f.to_string(), t.to_string())
     };
 
-    let db = open_db_if_enabled(&config.database)?;
-
     let commits = git::get_commits_in_date_range(&from_str, &to_str)?;
     if commits.is_empty() {
         println!("No commits found between {} and {}", from_str, to_str);
         return Ok(());
     }
-    let scores = score_commits(&commits, config, db.as_ref(), force)?;
+    let scores = score_commits(&commits, config, force)?;
     print_and_report(&scores, output)
 }
 
