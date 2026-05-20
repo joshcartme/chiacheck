@@ -76,7 +76,7 @@ cargo fiber history --days 30 --output history.html
 
 - `score_commits` owns DB I/O and cache UX: `open_db_if_enabled_interactive`, then unless `--force` one `prompt_cached_action` (`(u)se db` / clean `(r)un`; non-TTY defaults to use DB). `use_cache` gates per-commit `get_score`; misses checkout, score, `upsert_score`.
 - Historical runs use the `Config` loaded at process start for every commit; only the working tree changes with each checkout. Timestamps come from `CommitInfo.timestamp_unix`.
-- Before checkout, capture `git::get_head_ref()` (lazy, first cache miss).
+- Before checkout, capture `git::get_head_ref()` (lazy, first cache miss that needs checkout). Single-commit at current `HEAD` (`rev-parse HEAD` matches) skip checkout and restore.
 - Iterate commits chronological oldest to newest; helpers already reverse `git log`.
 - Inside `score_commits`, do not use `?` in the per-commit loop.
 - On per-commit errors, log, mark partial, continue.

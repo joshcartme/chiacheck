@@ -82,6 +82,17 @@ fn run_score_command(config: Config, force: bool) -> Result<()> {
     print_and_report(&scores, None)
 }
 
+/// True when `commits` is a single entry already at `HEAD` (no checkout needed).
+fn single_commit_is_current_commit(commits: &[CommitInfo]) -> bool {
+    if commits.len() != 1 {
+        return false;
+    }
+    let sha = &commits[0].sha;
+    git::get_current_commit()
+        .ok()
+        .is_some_and(|cur| cur == *sha)
+}
+
 /// Open the database when enabled, check out each commit in `commits`, run metrics,
 /// then restore HEAD. Cached commits (when the user chose cached scores) skip checkout
 /// entirely. Each checkout is scored with the same `config` passed in (loaded once at
@@ -105,6 +116,7 @@ fn score_commits(commits: &[CommitInfo], config: Config, force: bool) -> Result<
     // Lazily captured on first cache-miss that needs a checkout.
     let mut head_ref: Option<String> = None;
     let mut checked_out = false;
+    let score_in_place = single_commit_is_current_commit(commits);
 
     for info in commits {
         // NEVER use ? in this loop - an error must not skip the restore block below.
@@ -127,25 +139,27 @@ fn score_commits(commits: &[CommitInfo], config: Config, force: bool) -> Result<
             }
         }
 
-        // First actual checkout: capture HEAD lazily.
-        if head_ref.is_none() {
-            match git::get_head_ref() {
-                Ok(r) => head_ref = Some(r),
-                Err(e) => {
-                    eprintln!("Warning: could not capture HEAD ref: {e}");
-                    error_occurred = true;
-                    continue;
+        if !score_in_place {
+            // First actual checkout: capture HEAD lazily.
+            if head_ref.is_none() {
+                match git::get_head_ref() {
+                    Ok(r) => head_ref = Some(r),
+                    Err(e) => {
+                        eprintln!("Warning: could not capture HEAD ref: {e}");
+                        error_occurred = true;
+                        continue;
+                    }
                 }
             }
-        }
 
-        println!("Checking out {}...", &sha[..sha.len().min(8)]);
-        if let Err(e) = git::checkout_commit(sha) {
-            eprintln!("Warning: could not checkout {sha}: {e}");
-            error_occurred = true;
-            continue;
+            println!("Checking out {}...", &sha[..sha.len().min(8)]);
+            if let Err(e) = git::checkout_commit(sha) {
+                eprintln!("Warning: could not checkout {sha}: {e}");
+                error_occurred = true;
+                continue;
+            }
+            checked_out = true;
         }
-        checked_out = true;
 
         let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
         let score = score_with_config(&config, Some(sha.clone()), timestamp);
