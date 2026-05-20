@@ -1,8 +1,10 @@
 use crate::error::FiberError;
-use anyhow::Result;
+use crate::git;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_CONFIG: &str = "fiber.toml";
 
@@ -119,4 +121,58 @@ pub fn load_config(path: &str) -> Result<Config> {
 
     config.path = path.to_string();
     Ok(config)
+}
+
+/// Repo-relative path to the config file for use as a database cache key.
+///
+/// Resolves `config_path` against the current working directory, canonicalizes
+/// it and the git repo root, then returns the path relative to the repo root.
+pub fn repo_relative_config_path(config_path: &str) -> Result<String> {
+    let cwd = std::env::current_dir().context("Failed to get current working directory")?;
+    let absolute = if Path::new(config_path).is_absolute() {
+        PathBuf::from(config_path)
+    } else {
+        cwd.join(config_path)
+    };
+    let canonical = absolute
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve config path {}", config_path))?;
+    let repo_root = git::repo_root()?;
+    let repo_canonical = repo_root
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve repository root {}", repo_root.display()))?;
+    let relative = canonical.strip_prefix(&repo_canonical).with_context(|| {
+        format!(
+            "Config file {} is outside the git repository at {}",
+            canonical.display(),
+            repo_canonical.display()
+        )
+    })?;
+    Ok(relative.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repo_relative_config_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn repo_relative_config_path_resolves_fixture_config() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fiber.toml");
+        let relative = repo_relative_config_path(path.to_str().unwrap()).unwrap();
+        assert!(
+            relative.ends_with("tests/fixtures/fiber.toml"),
+            "expected repo-relative fixture path, got {relative}"
+        );
+    }
+
+    #[test]
+    fn repo_relative_config_path_resolves_example_config() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fiber.example.toml");
+        let relative = repo_relative_config_path(path.to_str().unwrap()).unwrap();
+        assert!(
+            relative.ends_with("fiber.example.toml"),
+            "expected repo-relative example config path, got {relative}"
+        );
+    }
 }

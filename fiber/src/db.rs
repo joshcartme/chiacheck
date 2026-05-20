@@ -7,12 +7,14 @@ use std::path::{Path, PathBuf};
 
 const MIGRATIONS_SLICE: &[M<'_>] = &[M::up(
     "CREATE TABLE scores (
-        commit_hash   TEXT PRIMARY KEY,
+        commit_hash   TEXT NOT NULL,
+        config_path   TEXT NOT NULL,
         timestamp     INTEGER NOT NULL,
         overall       REAL NOT NULL,
         health_score  TEXT NOT NULL,
         metric_config TEXT NOT NULL,
-        created_at    INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+        created_at    INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+        PRIMARY KEY (commit_hash, config_path)
     );",
 )];
 
@@ -47,22 +49,23 @@ impl Db {
         Ok(Db { conn })
     }
 
-    pub fn get_score(&self, sha: &str) -> Result<Option<HealthScore>> {
+    pub fn get_score(&self, sha: &str, config_path: &str) -> Result<Option<HealthScore>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT health_score FROM scores WHERE commit_hash = ?1")
+            .prepare("SELECT health_score FROM scores WHERE commit_hash = ?1 AND config_path = ?2")
             .with_context(|| "Failed to prepare get_score query")?;
 
-        let mut rows = stmt
-            .query([sha])
-            .with_context(|| format!("get_score query failed for {sha}"))?;
+        let mut rows = stmt.query([sha, config_path]).with_context(|| {
+            format!("get_score query failed for {sha} with config {config_path}")
+        })?;
 
         if let Some(row) = rows.next().with_context(|| "Error reading row")? {
             let json: String = row
                 .get(0)
                 .with_context(|| "Error reading health_score column")?;
-            let score: HealthScore = serde_json::from_str(&json)
-                .with_context(|| format!("Failed to deserialize HealthScore for {sha}"))?;
+            let score: HealthScore = serde_json::from_str(&json).with_context(|| {
+                format!("Failed to deserialize HealthScore for {sha} with config {config_path}")
+            })?;
             Ok(Some(score))
         } else {
             Ok(None)
@@ -74,6 +77,7 @@ impl Db {
     pub fn upsert_score(
         &self,
         sha: &str,
+        config_path: &str,
         score: &HealthScore,
         metrics: &[MetricConfig],
     ) -> Result<()> {
@@ -85,16 +89,25 @@ impl Db {
 
         self.conn
             .execute(
-                "INSERT INTO scores (commit_hash, timestamp, overall, health_score, metric_config)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(commit_hash) DO UPDATE SET
+                "INSERT INTO scores (commit_hash, config_path, timestamp, overall, health_score, metric_config)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(commit_hash, config_path) DO UPDATE SET
                      timestamp     = excluded.timestamp,
                      overall       = excluded.overall,
                      health_score  = excluded.health_score,
                      metric_config = excluded.metric_config",
-                rusqlite::params![sha, ts, score.overall, health_json, metrics_json],
+                rusqlite::params![
+                    sha,
+                    config_path,
+                    ts,
+                    score.overall,
+                    health_json,
+                    metrics_json
+                ],
             )
-            .with_context(|| format!("upsert_score failed for {sha}"))?;
+            .with_context(|| {
+                format!("upsert_score failed for {sha} with config {config_path}")
+            })?;
         Ok(())
     }
 }
@@ -112,6 +125,8 @@ mod tests {
     use crate::scorer::{PenaltyNode, build_health_score};
     use chrono::Utc;
     use tempfile::NamedTempFile;
+
+    const TEST_CONFIG_PATH: &str = "fiber.toml";
 
     #[test]
     fn migrations_are_valid() {
@@ -169,11 +184,12 @@ mod tests {
         let metrics = sample_metrics();
         let sha = score.commit.as_deref().unwrap();
 
-        assert!(db.get_score(sha).unwrap().is_none());
-        db.upsert_score(sha, &score, &metrics).unwrap();
-        assert!(db.get_score(sha).unwrap().is_some());
+        assert!(db.get_score(sha, TEST_CONFIG_PATH).unwrap().is_none());
+        db.upsert_score(sha, TEST_CONFIG_PATH, &score, &metrics)
+            .unwrap();
+        assert!(db.get_score(sha, TEST_CONFIG_PATH).unwrap().is_some());
 
-        let loaded = db.get_score(sha).unwrap().unwrap();
+        let loaded = db.get_score(sha, TEST_CONFIG_PATH).unwrap().unwrap();
         assert_eq!(loaded.commit.as_deref(), Some(sha));
         assert_eq!(loaded.overall, score.overall);
         assert_eq!(loaded.commit, score.commit);
@@ -189,12 +205,14 @@ mod tests {
         let metrics = sample_metrics();
         let sha = score.commit.clone().unwrap();
 
-        db.upsert_score(&sha, &score, &metrics).unwrap();
+        db.upsert_score(&sha, TEST_CONFIG_PATH, &score, &metrics)
+            .unwrap();
         // change overall and upsert again
         score.overall = 99.0;
-        db.upsert_score(&sha, &score, &metrics).unwrap();
+        db.upsert_score(&sha, TEST_CONFIG_PATH, &score, &metrics)
+            .unwrap();
 
-        let loaded = db.get_score(&sha).unwrap().unwrap();
+        let loaded = db.get_score(&sha, TEST_CONFIG_PATH).unwrap().unwrap();
         assert_eq!(loaded.overall, 99.0);
     }
 
@@ -218,8 +236,9 @@ mod tests {
         let metrics = sample_metrics();
         let sha = score.commit.as_deref().unwrap();
 
-        db.upsert_score(sha, &score, &metrics).unwrap();
-        let loaded = db.get_score(sha).unwrap().unwrap();
+        db.upsert_score(sha, TEST_CONFIG_PATH, &score, &metrics)
+            .unwrap();
+        let loaded = db.get_score(sha, TEST_CONFIG_PATH).unwrap().unwrap();
 
         // verify unattributed round-trips
         assert!((loaded.unattributed.get("m").copied().unwrap_or(0.0) - 0.5).abs() < 1e-9);
@@ -242,18 +261,45 @@ mod tests {
         let metrics = sample_metrics();
         let sha = score.commit.as_deref().unwrap();
 
-        db.upsert_score(sha, &score, &metrics).unwrap();
+        db.upsert_score(sha, TEST_CONFIG_PATH, &score, &metrics)
+            .unwrap();
 
         // read the raw timestamp column
         let stored_ts: i64 = db
             .conn
             .query_row(
-                "SELECT timestamp FROM scores WHERE commit_hash = ?1",
-                [sha],
+                "SELECT timestamp FROM scores WHERE commit_hash = ?1 AND config_path = ?2",
+                [sha, TEST_CONFIG_PATH],
                 |r| r.get(0),
             )
             .unwrap();
         assert_eq!(stored_ts, score.timestamp.timestamp());
+    }
+
+    #[test]
+    fn test_different_config_paths_same_commit() {
+        let tmp = NamedTempFile::new().unwrap();
+        let db = Db::open(tmp.path()).unwrap();
+        let sha = "abcdef1234567890";
+
+        let mut score_a = sample_score();
+        score_a.overall = 1.0;
+        let mut score_b = sample_score();
+        score_b.overall = 42.0;
+        let metrics = sample_metrics();
+
+        db.upsert_score(sha, "fiber.toml", &score_a, &metrics)
+            .unwrap();
+        db.upsert_score(sha, "configs/fiber.strict.toml", &score_b, &metrics)
+            .unwrap();
+
+        let loaded_a = db.get_score(sha, "fiber.toml").unwrap().unwrap();
+        let loaded_b = db
+            .get_score(sha, "configs/fiber.strict.toml")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded_a.overall, 1.0);
+        assert_eq!(loaded_b.overall, 42.0);
     }
 
     #[test]

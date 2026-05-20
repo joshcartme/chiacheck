@@ -1422,12 +1422,16 @@ fn test_db_cache_hit_and_miss() {
     let db = Db::open(tmp.path()).unwrap();
 
     let sha = "cafebabe00000000";
-    assert!(db.get_score(sha).unwrap().is_none(), "miss before insert");
+    let config_path = "fiber.toml";
+    assert!(
+        db.get_score(sha, config_path).unwrap().is_none(),
+        "miss before insert"
+    );
 
     let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
-    db.upsert_score(sha, &score, &[]).unwrap();
+    db.upsert_score(sha, config_path, &score, &[]).unwrap();
 
-    let loaded = db.get_score(sha).unwrap().unwrap();
+    let loaded = db.get_score(sha, config_path).unwrap().unwrap();
     assert_eq!(loaded.commit.as_deref(), Some(sha), "hit after insert");
 }
 
@@ -1441,15 +1445,16 @@ fn test_db_force_overwrites_cached() {
     let db = Db::open(tmp.path()).unwrap();
 
     let sha = "0000000000000001";
+    let config_path = "fiber.toml";
     let mut score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
     score.overall = 5.0;
-    db.upsert_score(sha, &score, &[]).unwrap();
+    db.upsert_score(sha, config_path, &score, &[]).unwrap();
 
     // Simulate --force by unconditionally upserting again with different value.
     score.overall = 99.0;
-    db.upsert_score(sha, &score, &[]).unwrap();
+    db.upsert_score(sha, config_path, &score, &[]).unwrap();
 
-    let loaded = db.get_score(sha).unwrap().unwrap();
+    let loaded = db.get_score(sha, config_path).unwrap().unwrap();
     assert_eq!(loaded.overall, 99.0, "--force should overwrite cached row");
 }
 
@@ -1460,7 +1465,7 @@ fn test_db_get_nonexistent_returns_none() {
 
     let tmp = NamedTempFile::new().unwrap();
     let db = Db::open(tmp.path()).unwrap();
-    let result = db.get_score("does_not_exist_sha").unwrap();
+    let result = db.get_score("does_not_exist_sha", "fiber.toml").unwrap();
     assert!(result.is_none());
 }
 
@@ -1473,10 +1478,11 @@ fn test_db_timestamp_column_matches_score() {
     let tmp = NamedTempFile::new().unwrap();
     let db = Db::open(tmp.path()).unwrap();
     let sha = "timestamp_test_sha";
+    let config_path = "fiber.toml";
     let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
     let expected_ts = score.timestamp.timestamp();
-    db.upsert_score(sha, &score, &[]).unwrap();
+    db.upsert_score(sha, config_path, &score, &[]).unwrap();
 
-    let loaded = db.get_score(sha).unwrap().unwrap();
+    let loaded = db.get_score(sha, config_path).unwrap().unwrap();
     assert_eq!(loaded.timestamp.timestamp(), expected_ts);
 }

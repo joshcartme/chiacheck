@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use fiber::cli::{Cli, Commands};
-use fiber::config::{Config, load_config};
+use fiber::config::{Config, load_config, repo_relative_config_path};
 use fiber::git::CommitInfo;
 use fiber::main_helpers::{
     CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled_interactive, prompt_cached_action,
@@ -111,6 +111,12 @@ fn score_commits(commits: &[CommitInfo], config: Config, force: bool) -> Result<
             CachedAction::ShowCached
         );
 
+    let config_path_key = if db.is_some() {
+        Some(repo_relative_config_path(&config.path)?)
+    } else {
+        None
+    };
+
     let mut scores: Vec<HealthScore> = Vec::new();
     let mut error_occurred = false;
     // Lazily captured on first cache-miss that needs a checkout.
@@ -123,10 +129,10 @@ fn score_commits(commits: &[CommitInfo], config: Config, force: bool) -> Result<
         let sha = &info.sha;
 
         // Cache hit: skip checkout entirely.
-        if let Some(ref db_ref) = db
+        if let (Some(db_ref), Some(config_path)) = (&db, &config_path_key)
             && use_cache
         {
-            match db_ref.get_score(sha) {
+            match db_ref.get_score(sha, config_path) {
                 Ok(Some(cached)) => {
                     scores.push(cached);
                     continue;
@@ -163,8 +169,8 @@ fn score_commits(commits: &[CommitInfo], config: Config, force: bool) -> Result<
 
         let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
         let score = score_with_config(&config, Some(sha.clone()), timestamp);
-        if let Some(ref db_ref) = db
-            && let Err(e) = db_ref.upsert_score(sha, &score, &config.metrics)
+        if let (Some(db_ref), Some(config_path)) = (&db, &config_path_key)
+            && let Err(e) = db_ref.upsert_score(sha, config_path, &score, &config.metrics)
         {
             eprintln!("Warning: could not cache score for {sha}: {e}");
         }

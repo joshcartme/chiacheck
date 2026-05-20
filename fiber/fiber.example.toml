@@ -6,8 +6,9 @@
 # ---------------------------------------------------------------------------
 # Optional database section — omit entirely to disable SQLite caching.
 # When enabled = true, every successful score is persisted in SQLite keyed by
-# commit hash, so repeated runs (fiber score, fiber range, fiber history) can
-# reuse cached results and skip re-running metrics.
+# commit hash and repo-relative config path, so repeated runs (fiber score,
+# fiber range, fiber history) can reuse cached results and skip re-running
+# metrics. Different --config files in the same repo get separate cache rows.
 #
 # [database]
 # enabled = true

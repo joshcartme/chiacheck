@@ -177,6 +177,12 @@ pub fn restore_head(head_ref: &str) -> Result<()> {
     run_git(&["checkout", head_ref], Some(true)).map(|_| ())
 }
 
+/// Absolute path to the git repository root (`git rev-parse --show-toplevel`).
+pub fn repo_root() -> Result<std::path::PathBuf> {
+    let root = run_git(&["rev-parse", "--show-toplevel"], None)?.unwrap();
+    Ok(std::path::PathBuf::from(root))
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_commit_info_lines;

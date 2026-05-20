@@ -344,6 +344,8 @@ fiber history --from 2024-01-01 --to 2024-03-31 --output q1.html
 
 Fiber can persist scores to a local SQLite database so repeated runs reuse cached results. Database use is **opt-in**: add a `[database]` section with `enabled = true` to your `fiber.toml`.
 
+Cached rows are keyed by **commit hash** and the **repo-relative path** to the config file (for example `fiber.toml` or `configs/strict.toml`). The same commit can therefore have separate cached scores when you run Fiber with different `--config` files in one repository.
+
 ### Minimal config (uses `fiber.db` in CWD)
 
 ```toml
@@ -381,7 +383,7 @@ When the database is enabled and `--force` is not set, `score`, `range`, and `hi
 Look up scores in the database, or run fresh? (u)se db / clean (r)un [u]:
 ```
 
-- **Use db (default, `u`, or empty line)** — For each commit, use a cached score when present (no checkout or metric run). Commits without a cache entry are checked out, scored, and stored.
+- **Use db (default, `u`, or empty line)** — For each commit, use a cached score for the current config path when present (no checkout or metric run). Commits without a cache entry for that config are checked out, scored, and stored.
 - **Clean run (`r`)** — Ignore cached rows for this run; every commit is checked out and scored fresh. New results are still written to the database when scoring completes.
 - **Non-interactive stdin** (not a TTY) — Treated as **use db** without reading stdin.
 
