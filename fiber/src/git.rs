@@ -1,7 +1,7 @@
 use crate::error::FiberError;
 use anyhow::Result;
 use std::collections::HashSet;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 /// A commit SHA paired with its unix timestamp, returned by the git log helpers
 /// so callers don't need a separate `git show` per commit.
@@ -11,71 +11,75 @@ pub struct CommitInfo {
     pub timestamp_unix: i64,
 }
 
-fn run_git(args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .output()
-        .map_err(|e| FiberError::Git(format!("Failed to run git: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(FiberError::Git(format!("git {:?} failed: {}", args, stderr)).into());
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+struct GitRun {
+    status: ExitStatus,
+    stderr: String,
+    stdout: Option<String>,
 }
 
-/// Like `run_git` but discards stdout — used for operations where only the
-/// exit code matters (checkout, restore).  Stderr is still captured for
-/// meaningful error messages.
-fn run_git_status(args: &[&str]) -> Result<()> {
-    let output = Command::new("git")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+fn run_git_raw(args: &[&str], discard_stdout: bool) -> Result<GitRun> {
+    let mut cmd = Command::new("git");
+    cmd.args(args);
+    if discard_stdout {
+        cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    }
+    let output = cmd
         .output()
         .map_err(|e| FiberError::Git(format!("Failed to run git: {}", e)))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(FiberError::Git(format!("git {:?} failed: {}", args, stderr)).into());
-    }
+    Ok(GitRun {
+        status: output.status,
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        stdout: if discard_stdout {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        },
+    })
+}
 
-    Ok(())
+/// Run `git` with `args`. When `discard_stdout` is `Some(true)`, stdout is not
+/// read (only the exit code matters) and the result is `Ok(None)` on success.
+/// Stderr is always captured for error messages.
+fn run_git(args: &[&str], discard_stdout: Option<bool>) -> Result<Option<String>> {
+    let discard = discard_stdout.unwrap_or(false);
+    let run = run_git_raw(args, discard)?;
+    if !run.status.success() {
+        return Err(FiberError::Git(format!("git {:?} failed: {}", args, run.stderr)).into());
+    }
+    Ok(run.stdout)
 }
 
 /// `true` when the index or tracked working tree differs from `HEAD`, matching
 /// a non-zero exit from `git diff --quiet HEAD`.
 pub fn is_head_diff_dirty() -> Result<bool> {
-    let output = Command::new("git")
-        .args(["diff", "--quiet", "HEAD"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| FiberError::Git(format!("Failed to run git: {}", e)))?;
-
-    if output.status.success() {
-        return Ok(false);
+    let run = run_git_raw(&["diff", "--quiet", "HEAD"], true)?;
+    match run.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => Err(FiberError::Git(format!(
+            "git diff --quiet HEAD failed: {}",
+            run.stderr.trim()
+        ))
+        .into()),
     }
-    if output.status.code() == Some(1) {
-        return Ok(true);
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(FiberError::Git(format!("git diff --quiet HEAD failed: {}", stderr.trim())).into())
 }
 
 pub fn stash_push_before_command() -> Result<()> {
-    run_git_status(&[
-        "stash",
-        "push",
-        "-m",
-        "fiber: temporary stash before command",
-    ])
+    run_git(
+        &[
+            "stash",
+            "push",
+            "-m",
+            "fiber: temporary stash before command",
+        ],
+        Some(true),
+    )
+    .map(|_| ())
 }
 
 pub fn stash_pop() -> Result<()> {
-    run_git_status(&["stash", "pop"])
+    run_git(&["stash", "pop", "--index"], Some(true)).map(|_| ())
 }
 
 /// Parse `git log --pretty=format:%H%x09%ct` output into CommitInfo values.
@@ -121,7 +125,7 @@ fn parse_commit_info_lines(output: &str) -> Result<Vec<CommitInfo>> {
 
 pub fn get_commits_in_range(from: &str, to: &str) -> Result<Vec<CommitInfo>> {
     let range = format!("{}..{}", from, to);
-    let output = run_git(&["log", "--pretty=format:%H%x09%ct", &range])?;
+    let output = run_git(&["log", "--pretty=format:%H%x09%ct", &range], None)?.unwrap();
     let mut commits = parse_commit_info_lines(&output)?;
     commits.reverse();
     Ok(commits)
@@ -130,7 +134,7 @@ pub fn get_commits_in_range(from: &str, to: &str) -> Result<Vec<CommitInfo>> {
 pub fn get_commits_in_date_range(from: &str, to: &str) -> Result<Vec<CommitInfo>> {
     let after = format!("--after={}", from);
     let before = format!("--before={}", to);
-    let output = run_git(&["log", "--pretty=format:%H%x09%ct", &after, &before])?;
+    let output = run_git(&["log", "--pretty=format:%H%x09%ct", &after, &before], None)?.unwrap();
     let mut commits = parse_commit_info_lines(&output)?;
     commits.reverse();
     let mut seen = HashSet::new();
@@ -139,20 +143,20 @@ pub fn get_commits_in_date_range(from: &str, to: &str) -> Result<Vec<CommitInfo>
 }
 
 pub fn checkout_commit(sha: &str) -> Result<()> {
-    run_git_status(&["checkout", "--detach", sha])
+    run_git(&["checkout", "--detach", sha], Some(true)).map(|_| ())
 }
 
 pub fn get_current_commit() -> Result<String> {
-    run_git(&["rev-parse", "HEAD"])
+    Ok(run_git(&["rev-parse", "HEAD"], None)?.unwrap())
 }
 
 /// Returns the current branch name if HEAD is on a branch, or the commit SHA
 /// if HEAD is detached.  Always use this (not `get_current_commit`) before a
 /// traversal so that `restore_head` can return to the branch afterwards.
 pub fn get_head_ref() -> Result<String> {
-    match run_git(&["symbolic-ref", "--short", "HEAD"]) {
-        Ok(branch) if !branch.is_empty() => Ok(branch),
-        _ => run_git(&["rev-parse", "HEAD"]),
+    match run_git(&["symbolic-ref", "--short", "HEAD"], None) {
+        Ok(Some(branch)) if !branch.is_empty() => Ok(branch),
+        _ => Ok(run_git(&["rev-parse", "HEAD"], None)?.unwrap()),
     }
 }
 
@@ -160,7 +164,7 @@ pub fn get_head_ref() -> Result<String> {
 /// Works for both branch names and commit SHAs — git will put HEAD on the
 /// branch if the ref is a branch name, or enter detached HEAD for a SHA.
 pub fn restore_head(head_ref: &str) -> Result<()> {
-    run_git_status(&["checkout", head_ref])
+    run_git(&["checkout", head_ref], Some(true)).map(|_| ())
 }
 
 #[cfg(test)]
