@@ -12,9 +12,12 @@ Fiber workspace specific guidance. Keep this file terse and agent-focused; targe
 
 ## Repository Map
 
+- `src/main.rs`: CLI entry; `load_config` once, then dispatches. `score` / `range` / `history` all call `score_commits` (DB open, one cache prompt, checkout loop, restore HEAD). `run_score_command` uses `get_current_commit_info` for a single commit; if not in a git repo, scores in place with `commit: None` and skips `score_commits`.
+- `src/main_helpers.rs`: interactive prompts (missing DB file, use DB vs clean run, dirty-tree stash).
+- `src/db.rs`: SQLite score cache (`get_score` / `upsert_score`; key is `(commit_hash, config_path)`).
 - `src/lib.rs`: exposes library modules.
 - `src/cli.rs`: clap definitions; `--config` is `global = true`; default is `fiber.toml`.
-- `src/config.rs`: TOML schema, `MetricConfig`, `AstFeature` / `parse_ast_feature`, duplicate metric-name rejection.
+- `src/config.rs`: TOML schema, `MetricConfig`, `AstFeature` / `parse_ast_feature`, duplicate metric-name rejection; `load_config` stores absolutized `Config.path`; `Config::repo_relative_config_path` for DB cache keys.
 - `src/error.rs`: `FiberError`.
 - `src/git.rs`: git wrappers plus commit/date range traversal.
 - `src/metrics/mod.rs`: `MetricResult`.
@@ -40,7 +43,7 @@ cargo fiber history --days 30 --output history.html
 - `MetricResult` (`Clone+Serialize`): `name`, `total_penalty`, `attributed: Vec<(String, f64)>`, `unattributed`, `details`.
 - `PenaltyNode` (`Debug+Serialize`): file/dir tree with per-metric `penalties`; directory penalties aggregate descendants.
 - `HealthScore` (`Clone+Serialize`): `overall`, `unattributed`, `tree`, `metrics`, `commit`, `timestamp`; built by `build_health_score()`.
-- `CommitInfo`: `sha`, `timestamp_unix`; returned by `get_commits_in_range` / `get_commits_in_date_range`; no extra `git show` needed.
+- `CommitInfo`: `sha`, `timestamp_unix`; from `get_current_commit_info`, `get_commits_in_range`, or `get_commits_in_date_range` (`git log` `%H` + `%ct`; no per-commit `git show`).
 
 ## Metric Rules
 
@@ -71,11 +74,13 @@ cargo fiber history --days 30 --output history.html
 
 ## Git Traversal
 
-- Before checkout, capture `git::get_head_ref()`.
+- `score_commits` owns DB I/O and cache UX: `open_db_if_enabled_interactive`, then unless `--force` one `prompt_cached_action` (`(u)se db` / clean `(r)un`; non-TTY defaults to use DB). When the DB is open, `config.repo_relative_config_path()?` supplies the cache key; `use_cache` gates per-commit `get_score(sha, config_path)`; misses checkout, score, `upsert_score`.
+- Historical runs use the `Config` loaded at process start for every commit; only the working tree changes with each checkout. Timestamps come from `CommitInfo.timestamp_unix`.
+- Before checkout, capture `git::get_head_ref()` (lazy, first cache miss that needs checkout). Single-commit at current `HEAD` (`rev-parse HEAD` matches) skip checkout and restore.
 - Iterate commits chronological oldest to newest; helpers already reverse `git log`.
 - Inside `score_commits`, do not use `?` in the per-commit loop.
 - On per-commit errors, log, mark partial, continue.
-- Always call `git::restore_head(&head_ref)` after the loop.
+- Call `git::restore_head(&head_ref)` only when a checkout actually ran.
 - `restore_head` must handle branch names and detached SHAs.
 - Date-range history should stay duplicate-free; tests assert no duplicate SHAs.
 
@@ -90,7 +95,7 @@ cargo fiber history --days 30 --output history.html
 ## Common Tasks
 
 - Add/change metric type: update `src/metrics/runner.rs` (and `src/config.rs` for `ast` sub-features / `AstFeature`), README config docs, `fiber.example.toml` if relevant, and integration tests.
-- Change CLI: update `src/cli.rs`, keep `src/main.rs` thin, update README CLI docs.
+- Change CLI or cache/DB flow: update `src/cli.rs`, `src/main.rs` / `src/main_helpers.rs`, `src/db.rs`, README SQLite section.
 - Change scoring: update `src/scorer.rs`; preserve penalty accumulation semantics and add focused tests.
 - Change git range semantics: update `src/git.rs` and tests for chronological, duplicate-free output.
 - Change reports: update `src/report.rs`; preserve escaping and `json_for_html_script()` coverage.

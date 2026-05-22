@@ -20,6 +20,8 @@ oxc_ast = { workspace = true }
 oxc_ast_visit = "0.127"
 glob = "0.3"
 rayon = "1"
+rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite_migration = "2.5.0"
 
 [dev-dependencies]
 tempfile = "3"

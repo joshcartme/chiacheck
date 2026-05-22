@@ -1,7 +1,7 @@
 use crate::error::FiberError;
 use anyhow::Result;
 use std::collections::HashSet;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 /// A commit SHA paired with its unix timestamp, returned by the git log helpers
 /// so callers don't need a separate `git show` per commit.
@@ -11,37 +11,84 @@ pub struct CommitInfo {
     pub timestamp_unix: i64,
 }
 
-fn run_git(args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .output()
-        .map_err(|e| FiberError::Git(format!("Failed to run git: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(FiberError::Git(format!("git {:?} failed: {}", args, stderr)).into());
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+struct GitRun {
+    status: ExitStatus,
+    stderr: String,
+    stdout: Option<String>,
 }
 
-/// Like `run_git` but discards stdout — used for operations where only the
-/// exit code matters (checkout, restore).  Stderr is still captured for
-/// meaningful error messages.
-fn run_git_status(args: &[&str]) -> Result<()> {
-    let output = Command::new("git")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+fn run_git_raw(args: &[&str], discard_stdout: bool) -> Result<GitRun> {
+    let mut cmd = Command::new("git");
+    cmd.args(args);
+    if discard_stdout {
+        cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    }
+    let output = cmd
         .output()
         .map_err(|e| FiberError::Git(format!("Failed to run git: {}", e)))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(FiberError::Git(format!("git {:?} failed: {}", args, stderr)).into());
-    }
+    Ok(GitRun {
+        status: output.status,
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        stdout: if discard_stdout {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        },
+    })
+}
 
+fn git_command_failed(args: &[&str], stderr: &str) -> anyhow::Error {
+    FiberError::Git(format!("git {:?} failed: {}", args, stderr)).into()
+}
+
+/// Run `git` with `args` and return trimmed stdout on success. Stderr is captured
+/// for error messages.
+fn run_git(args: &[&str]) -> Result<String> {
+    let run = run_git_raw(args, false)?;
+    if !run.status.success() {
+        return Err(git_command_failed(args, &run.stderr));
+    }
+    Ok(run
+        .stdout
+        .expect("stdout captured when discard_stdout is false"))
+}
+
+/// Run `git` with `args`; only the exit code matters on success.
+fn run_git_quiet(args: &[&str]) -> Result<()> {
+    let run = run_git_raw(args, true)?;
+    if !run.status.success() {
+        return Err(git_command_failed(args, &run.stderr));
+    }
     Ok(())
+}
+
+/// `true` when the index or tracked working tree differs from `HEAD`, matching
+/// a non-zero exit from `git diff --quiet HEAD`.
+pub fn is_head_diff_dirty() -> Result<bool> {
+    let run = run_git_raw(&["diff", "--quiet", "HEAD"], true)?;
+    match run.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => Err(FiberError::Git(format!(
+            "git diff --quiet HEAD failed: {}",
+            run.stderr.trim()
+        ))
+        .into()),
+    }
+}
+
+pub fn stash_push_before_command() -> Result<()> {
+    run_git_quiet(&[
+        "stash",
+        "push",
+        "-m",
+        "fiber: temporary stash before command",
+    ])
+}
+
+pub fn stash_pop() -> Result<()> {
+    run_git_quiet(&["stash", "pop", "--index"])
 }
 
 /// Parse `git log --pretty=format:%H%x09%ct` output into CommitInfo values.
@@ -105,11 +152,21 @@ pub fn get_commits_in_date_range(from: &str, to: &str) -> Result<Vec<CommitInfo>
 }
 
 pub fn checkout_commit(sha: &str) -> Result<()> {
-    run_git_status(&["checkout", "--detach", sha])
+    run_git_quiet(&["checkout", "--detach", sha])
 }
 
 pub fn get_current_commit() -> Result<String> {
     run_git(&["rev-parse", "HEAD"])
+}
+
+/// Current `HEAD` as [`CommitInfo`] (SHA and committer timestamp from `git log -1`).
+pub fn get_current_commit_info() -> Result<CommitInfo> {
+    let output = run_git(&["log", "-1", "--pretty=format:%H%x09%ct"])?;
+    let commits = parse_commit_info_lines(&output)?;
+    commits
+        .into_iter()
+        .next()
+        .ok_or_else(|| FiberError::Git("git log -1 returned no commits".to_string()).into())
 }
 
 /// Returns the current branch name if HEAD is on a branch, or the commit SHA
@@ -126,7 +183,13 @@ pub fn get_head_ref() -> Result<String> {
 /// Works for both branch names and commit SHAs — git will put HEAD on the
 /// branch if the ref is a branch name, or enter detached HEAD for a SHA.
 pub fn restore_head(head_ref: &str) -> Result<()> {
-    run_git_status(&["checkout", head_ref])
+    run_git_quiet(&["checkout", head_ref])
+}
+
+/// Absolute path to the git repository root (`git rev-parse --show-toplevel`).
+pub fn repo_root() -> Result<std::path::PathBuf> {
+    let root = run_git(&["rev-parse", "--show-toplevel"])?;
+    Ok(std::path::PathBuf::from(root))
 }
 
 #[cfg(test)]

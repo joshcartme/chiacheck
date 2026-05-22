@@ -129,13 +129,18 @@ fn build_release(crate_dir: &Path, target_dir: &Path) -> Result<()> {
 
 /// Run `fiber score` inside `target_dir` exactly `runs` times, using
 /// `/usr/bin/time` to measure wall-clock elapsed seconds.
+/// does a 0th warmup run that is not included in the results.
 ///
 /// Returns a `Vec` of elapsed seconds, one entry per run.
 fn bench_binary(binary: &Path, target_dir: &Path, runs: usize) -> Result<Vec<f64>> {
     let mut times = Vec::with_capacity(runs);
 
-    for i in 1..=runs {
-        print!("  run {i}/{runs} … ");
+    for i in 0..=runs {
+        if i > 0 {
+            print!("  run {i}/{runs} … ");
+        } else {
+            print!("  warmup … ");
+        }
 
         // `/usr/bin/time -f "ELAPSED:%e"` writes the marker line to stderr.
         // fiber's own stdout/stderr are suppressed to keep output readable.
@@ -161,7 +166,10 @@ fn bench_binary(binary: &Path, target_dir: &Path, runs: usize) -> Result<Vec<f64
         }
 
         println!("{elapsed:.3}s");
-        times.push(elapsed);
+        // skip the warmup run
+        if i > 0 {
+            times.push(elapsed);
+        }
     }
 
     Ok(times)

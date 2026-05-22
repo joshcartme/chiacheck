@@ -262,13 +262,19 @@ error_penalty = 1.0
 
 ### `fiber score`
 
-Calculate the health score for the current working tree state.
+Calculate the health score for the current `HEAD` commit.
 
 ```bash
-fiber score
+fiber score [--force]
 ```
 
-Reads `fiber.toml`, runs all metrics, and prints coloured output:
+| Flag       | Description                                                  |
+| ---------- | ------------------------------------------------------------ |
+| `--force`  | Bypass cache; always recompute and overwrite cached scores   |
+
+Uses the configuration loaded at startup (see [Configuration Reference](#configuration-reference)), resolves `HEAD` via `git log -1` (SHA and commit timestamp), runs all metrics, and prints coloured output. With the [SQLite score cache](#sqlite-score-cache) enabled, behavior matches `range` / `history`: Fiber may reuse a cached row or check out `HEAD` to score, then restore your previous branch or detached state. Outside a git repository, Fiber scores the working tree once with no commit SHA and does not use the database.
+
+Example output:
 
 ```
 Total Penalty: 3.5  (0 = perfect)
@@ -296,8 +302,9 @@ fiber range --from <SHA> --to <SHA> [--output report.html]
 | `--from`   | Start commit SHA (exclusive, using git `from..to` semantics) |
 | `--to`     | End commit SHA (inclusive)                                   |
 | `--output` | Optional path to write an HTML report                        |
+| `--force`  | Bypass cache; always recompute and overwrite cached scores   |
 
-Fiber will check out each commit in the git range `from..to`, run metrics, restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
+Fiber will check out each commit in the git range `from..to`, run metrics against that revision of the tree (using the same metric definitions loaded at the start of the run), restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
 
 ```bash
 fiber range --from abc1234 --to def5678 --output report.html
@@ -319,8 +326,9 @@ fiber history [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days N] [--output report.
 | `--to`     | End date (ISO 8601)                   |
 | `--days`   | Shorthand: last N days                |
 | `--output` | Optional path to write an HTML report |
+| `--force`  | Bypass cache; always recompute        |
 
-Use either `--days` or the pair `--from` and `--to`. The date range is passed to git as `--after=<from>` and `--before=<to>`, so it follows git's date parsing and boundary behavior.
+Use either `--days` or the pair `--from` and `--to`. The date range is passed to git as `--after=<from>` and `--before=<to>`, so it follows git's date parsing and boundary behavior. As with `range`, each checkout uses the repository state at that commit while metric definitions stay those from the config Fiber loaded at startup.
 
 ```bash
 # Last 30 days, with HTML output
@@ -328,6 +336,76 @@ fiber history --days 30 --output history.html
 
 # Specific date range
 fiber history --from 2024-01-01 --to 2024-03-31 --output q1.html
+```
+
+---
+
+## SQLite Score Cache
+
+Fiber can persist scores to a local SQLite database so repeated runs reuse cached results. Database use is **opt-in**: add a `[database]` section with `enabled = true` to your `fiber.toml`.
+
+Cached rows are keyed by **commit hash** and the **repo-relative path** to the config file (for example `fiber.toml` or `configs/strict.toml`). The same commit can therefore have separate cached scores when you run Fiber with different `--config` files in one repository.
+
+### Minimal config (uses `fiber.db` in CWD)
+
+```toml
+[database]
+enabled = true
+```
+
+### With an explicit path
+
+```toml
+[database]
+enabled = true
+path = "./scores/fiber.db"
+```
+
+`path` is resolved relative to the current working directory. When `path` is omitted, `fiber.db` in the CWD is used.
+
+### Missing-file prompt
+
+If `enabled = true` but the database file does not exist yet, Fiber asks:
+
+```
+Database file fiber.db does not exist. (c)reate it / (q)uit [q]:
+```
+
+- **Accept (`c`)** — Fiber creates the file (and any parent directories) then continues.
+- **Decline or empty line (`q`)** — Fiber exits non-zero with instructions: set `enabled = false` under `[database]` or remove the `[database]` section entirely.
+- **Non-interactive stdin** (when stdin is not a TTY) — Fiber immediately treats this as a decline and exits non-zero without reading stdin.
+
+### Cache lookup prompt
+
+When the database is enabled and `--force` is not set, `score`, `range`, and `history` all ask **once** before scoring:
+
+```
+Look up scores in the database, or run fresh? (u)se db / clean (r)un [u]:
+```
+
+- **Use db (default, `u`, or empty line)** — For each commit, use a cached score for the current config path when present (no checkout or metric run). Commits without a cache entry for that config are checked out, scored, and stored.
+- **Clean run (`r`)** — Ignore cached rows for this run; every commit is checked out and scored fresh. New results are still written to the database when scoring completes.
+- **Non-interactive stdin** (not a TTY) — Treated as **use db** without reading stdin.
+
+`fiber score` applies this to the single `HEAD` commit; `range` and `history` apply it across every commit in the requested range.
+
+### `--force` flag
+
+All three commands accept `--force` to bypass the cache, always recompute metrics, and overwrite any existing cached row:
+
+```bash
+fiber score --force
+fiber range --from abc1234 --to def5678 --force
+fiber history --days 30 --force
+```
+
+### Disabling the database
+
+Set `enabled = false` (or omit the `[database]` section entirely) to run without any database I/O:
+
+```toml
+[database]
+enabled = false
 ```
 
 ---

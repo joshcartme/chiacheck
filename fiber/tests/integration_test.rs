@@ -5,7 +5,7 @@ use fiber::config::{MetricConfig, load_config};
 use fiber::metrics::MetricResult;
 use fiber::metrics::runner::{run_all_metrics, run_metric};
 use fiber::scorer::build_health_score;
-use std::path::{Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 use tempfile::TempDir;
 
 fn metric_config(name: &str, metric_type: &str, command: Option<&str>) -> MetricConfig {
@@ -55,7 +55,12 @@ fn metric_result(
 
 #[test]
 fn test_config_parsing() {
-    let config = load_config("tests/fixtures/fiber.toml").expect("should parse config");
+    let path = "tests/fixtures/fiber.toml";
+    let config = load_config(path).expect("should parse config");
+    assert_eq!(
+        config.path,
+        path::absolute(path).expect("should resolve path")
+    );
     assert_eq!(config.metrics.len(), 2);
     assert_eq!(config.metrics[0].name, "lint");
     assert_eq!(config.metrics[0].metric_type, "count");
@@ -1331,4 +1336,156 @@ fn test_run_all_metrics_mixed_ast_non_ast_order() {
     assert_close(results[0].total_penalty, 5.0);
     assert_close(results[1].total_penalty, 1.0);
     assert_close(results[2].total_penalty, 3.0);
+}
+
+// --- database integration tests -----------------------------------------------
+
+#[test]
+fn test_db_enabled_false_no_file_created() {
+    use fiber::config::{Config, DatabaseConfig};
+    use fiber::main_helpers::open_db_if_enabled;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("should_not_exist.db");
+
+    // Build a DatabaseConfig with enabled = false pointing at a path we own.
+    let cfg = Config {
+        metrics: vec![],
+        database: Some(DatabaseConfig {
+            enabled: false,
+            path: Some(db_path.to_string_lossy().to_string()),
+        }),
+        path: PathBuf::new(),
+    };
+
+    let result = open_db_if_enabled(&cfg.database);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_none());
+    assert!(!db_path.exists(), "DB file must not exist when disabled");
+}
+
+#[test]
+fn test_db_decline_non_interactive_returns_error() {
+    use fiber::config::{Config, DatabaseConfig};
+    use fiber::main_helpers::{DECLINE_CREATE_DB_MSG, open_db_if_enabled_interactive};
+    use std::io::Cursor;
+    use tempfile::tempdir;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("should_not_exist.db");
+
+    let cfg = Config {
+        metrics: vec![],
+        database: Some(DatabaseConfig {
+            enabled: true,
+            path: Some(db_path.to_string_lossy().to_string()),
+        }),
+        path: PathBuf::new(),
+    };
+
+    // `open_db_if_enabled` uses stdin TTY detection, which is often true under
+    // `cargo test` in a normal terminal. Force non-interactive so we never read stdin.
+    let result = open_db_if_enabled_interactive(
+        &cfg.database,
+        &mut Cursor::new(b""),
+        &mut Vec::new(),
+        false,
+    )
+    .map(|_| ());
+    assert!(result.is_err(), "expected error when declining DB creation");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains(DECLINE_CREATE_DB_MSG),
+        "expected error to contain decline message, got: {msg}"
+    );
+    assert!(!db_path.exists(), "DB file must not exist after decline");
+}
+
+#[test]
+fn test_db_omitted_path_defaults_to_fiber_db() {
+    use fiber::config::DatabaseConfig;
+    use fiber::db::resolved_db_path;
+
+    let cfg = DatabaseConfig {
+        enabled: true,
+        path: None,
+    };
+    let resolved = resolved_db_path(&cfg);
+    assert_eq!(resolved.file_name().unwrap(), "fiber.db");
+}
+
+#[test]
+fn test_db_cache_hit_and_miss() {
+    use fiber::db::Db;
+    use fiber::scorer::build_health_score;
+    use tempfile::NamedTempFile;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db = Db::open(tmp.path()).unwrap();
+
+    let sha = "cafebabe00000000";
+    let config_path = "fiber.toml";
+    assert!(
+        db.get_score(sha, config_path).unwrap().is_none(),
+        "miss before insert"
+    );
+
+    let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
+    db.upsert_score(sha, config_path, &score, &[]).unwrap();
+
+    let loaded = db.get_score(sha, config_path).unwrap().unwrap();
+    assert_eq!(loaded.commit.as_deref(), Some(sha), "hit after insert");
+}
+
+#[test]
+fn test_db_force_overwrites_cached() {
+    use fiber::db::Db;
+    use fiber::scorer::build_health_score;
+    use tempfile::NamedTempFile;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db = Db::open(tmp.path()).unwrap();
+
+    let sha = "0000000000000001";
+    let config_path = "fiber.toml";
+    let mut score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
+    score.overall = 5.0;
+    db.upsert_score(sha, config_path, &score, &[]).unwrap();
+
+    // Simulate --force by unconditionally upserting again with different value.
+    score.overall = 99.0;
+    db.upsert_score(sha, config_path, &score, &[]).unwrap();
+
+    let loaded = db.get_score(sha, config_path).unwrap().unwrap();
+    assert_eq!(loaded.overall, 99.0, "--force should overwrite cached row");
+}
+
+#[test]
+fn test_db_get_nonexistent_returns_none() {
+    use fiber::db::Db;
+    use tempfile::NamedTempFile;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db = Db::open(tmp.path()).unwrap();
+    let result = db.get_score("does_not_exist_sha", "fiber.toml").unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_db_timestamp_column_matches_score() {
+    use fiber::db::Db;
+    use fiber::scorer::build_health_score;
+    use tempfile::NamedTempFile;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db = Db::open(tmp.path()).unwrap();
+    let sha = "timestamp_test_sha";
+    let config_path = "fiber.toml";
+    let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
+    let expected_ts = score.timestamp.timestamp();
+    db.upsert_score(sha, config_path, &score, &[]).unwrap();
+
+    let loaded = db.get_score(sha, config_path).unwrap().unwrap();
+    assert_eq!(loaded.timestamp.timestamp(), expected_ts);
 }

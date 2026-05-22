@@ -1,7 +1,9 @@
 pub mod cli;
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod git;
+pub mod main_helpers;
 pub mod metrics;
 pub mod report;
 pub mod scorer;

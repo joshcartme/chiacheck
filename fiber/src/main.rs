@@ -2,11 +2,16 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use fiber::cli::{Cli, Commands};
-use fiber::config::load_config;
+use fiber::config::{Config, load_config};
 use fiber::git::CommitInfo;
+use fiber::main_helpers::{
+    CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled_interactive, prompt_cached_action,
+    prompt_stash_dirty_worktree,
+};
 use fiber::metrics::runner::run_all_metrics;
 use fiber::scorer::{HealthScore, build_health_score};
 use fiber::{git, report};
+use std::io::IsTerminal;
 
 fn print_score(score: &HealthScore) {
     let color = if score.overall == 0.0 {
@@ -42,58 +47,15 @@ fn print_score(score: &HealthScore) {
     println!();
 }
 
-/// Load config from `config_path`, run all metrics, and build a [`HealthScore`].
-///
-/// Uses the process working directory (falling back to `"."`) so file globs in
-/// the config resolve relative to where fiber was invoked.
-fn score_config(
-    config_path: &str,
+/// Run all metrics from the already-loaded `config` and build a [`HealthScore`].
+fn score_with_config(
+    config: &Config,
     commit: Option<String>,
     timestamp: DateTime<Utc>,
-) -> Result<HealthScore> {
-    let config = load_config(config_path)?;
+) -> HealthScore {
     let working_dir_buf = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let results = run_all_metrics(&config.metrics, working_dir_buf.as_path());
-    Ok(build_health_score(results, commit, timestamp))
-}
-
-/// Check out each commit in `commits`, run metrics from `config_path`, then
-/// restore HEAD.  Returns the collected scores in chronological order.
-fn score_commits(commits: &[CommitInfo], config_path: &str) -> Result<Vec<HealthScore>> {
-    let head_ref = git::get_head_ref()?;
-    let mut scores: Vec<HealthScore> = Vec::new();
-    let mut error_occurred = false;
-
-    for info in commits {
-        let sha = &info.sha;
-        println!("Checking out {}...", &sha[..sha.len().min(8)]);
-        if let Err(e) = git::checkout_commit(sha) {
-            eprintln!("Warning: could not checkout {}: {}", sha, e);
-            error_occurred = true;
-            continue;
-        }
-        // Do NOT use `?` here – an error must not skip the restore block below.
-        let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
-        match score_config(config_path, Some(sha.clone()), timestamp) {
-            Ok(score) => scores.push(score),
-            Err(e) => {
-                eprintln!("Warning: could not load config at {}: {}", config_path, e);
-                error_occurred = true;
-                continue;
-            }
-        }
-    }
-
-    // Always restore original HEAD, whether on a branch or detached.
-    if let Err(e) = git::restore_head(&head_ref) {
-        eprintln!("Warning: could not restore HEAD to {}: {}", head_ref, e);
-    }
-
-    if error_occurred {
-        eprintln!("Some commits had errors.");
-    }
-
-    Ok(scores)
+    build_health_score(results, commit, timestamp)
 }
 
 /// Print all scores and optionally write an HTML report.
@@ -108,17 +70,141 @@ fn print_and_report(scores: &[HealthScore], output: Option<&str>) -> Result<()> 
     Ok(())
 }
 
-fn run_score_command(config_path: &str) -> Result<HealthScore> {
-    score_config(config_path, git::get_current_commit().ok(), Utc::now())
+fn run_score_command(config: Config, force: bool) -> Result<()> {
+    // if not in a git repo still run the score command
+    let Some(commit) = git::get_current_commit_info().ok() else {
+        let score = score_with_config(&config, None, Utc::now());
+        print_score(&score);
+        return Ok(());
+    };
+
+    let scores = score_commits(&[commit], config, force)?;
+    print_and_report(&scores, None)
 }
 
-fn run_range_command(from: &str, to: &str, output: Option<&str>, config_path: &str) -> Result<()> {
+/// True when `commits` is a single entry already at `HEAD` (no checkout needed).
+fn single_commit_is_current_commit(commits: &[CommitInfo]) -> bool {
+    if commits.len() != 1 {
+        return false;
+    }
+    let sha = &commits[0].sha;
+    git::get_current_commit()
+        .ok()
+        .is_some_and(|cur| cur == *sha)
+}
+
+/// Open the database when enabled, check out each commit in `commits`, run metrics,
+/// then restore HEAD. Cached commits (when the user chose cached scores) skip checkout
+/// entirely. Each checkout is scored with the same `config` passed in (loaded once at
+/// CLI startup); the working tree reflects the checked-out commit.
+fn score_commits(commits: &[CommitInfo], config: Config, force: bool) -> Result<Vec<HealthScore>> {
+    let is_terminal = std::io::stdin().is_terminal();
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    let db =
+        open_db_if_enabled_interactive(&config.database, &mut stdin, &mut stdout, is_terminal)?;
+
+    let use_cache = !force
+        && db.is_some()
+        && matches!(
+            prompt_cached_action(&mut stdin, &mut stdout, is_terminal)?,
+            CachedAction::ShowCached
+        );
+
+    let config_path_key = if db.is_some() {
+        Some(config.repo_relative_config_path()?)
+    } else {
+        None
+    };
+
+    let mut scores: Vec<HealthScore> = Vec::new();
+    let mut error_occurred = false;
+    // Lazily captured on first cache-miss that needs a checkout.
+    let mut head_ref: Option<String> = None;
+    let mut checked_out = false;
+    let score_in_place = single_commit_is_current_commit(commits);
+
+    for info in commits {
+        // NEVER use ? in this loop - an error must not skip the restore block below.
+        let sha = &info.sha;
+
+        // Cache hit: skip checkout entirely.
+        if let (Some(db_ref), Some(config_path)) = (&db, &config_path_key)
+            && use_cache
+        {
+            match db_ref.get_score(sha, config_path) {
+                Ok(Some(cached)) => {
+                    scores.push(cached);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("Warning: error loading cached score for {sha}: {e}");
+                    error_occurred = true;
+                }
+            }
+        }
+
+        if !score_in_place {
+            // First actual checkout: capture HEAD lazily.
+            if head_ref.is_none() {
+                match git::get_head_ref() {
+                    Ok(r) => head_ref = Some(r),
+                    Err(e) => {
+                        eprintln!("Warning: could not capture HEAD ref: {e}");
+                        error_occurred = true;
+                        continue;
+                    }
+                }
+            }
+
+            println!("Checking out {}...", &sha[..sha.len().min(8)]);
+            if let Err(e) = git::checkout_commit(sha) {
+                eprintln!("Warning: could not checkout {sha}: {e}");
+                error_occurred = true;
+                continue;
+            }
+            checked_out = true;
+        }
+
+        let timestamp = DateTime::from_timestamp(info.timestamp_unix, 0).unwrap_or_else(Utc::now);
+        let score = score_with_config(&config, Some(sha.clone()), timestamp);
+        if let (Some(db_ref), Some(config_path)) = (&db, &config_path_key)
+            && let Err(e) = db_ref.upsert_score(sha, config_path, &score, &config.metrics)
+        {
+            eprintln!("Warning: could not cache score for {sha}: {e}");
+        }
+        scores.push(score);
+    }
+
+    // Restore HEAD only if we actually checked anything out.
+    if checked_out
+        && let Some(ref hr) = head_ref
+        && let Err(e) = git::restore_head(hr)
+    {
+        eprintln!("Warning: could not restore HEAD to {hr}: {e}");
+    }
+
+    if error_occurred {
+        eprintln!("Some commits had errors.");
+    }
+
+    Ok(scores)
+}
+
+fn run_range_command(
+    from: &str,
+    to: &str,
+    output: Option<&str>,
+    config: Config,
+    force: bool,
+) -> Result<()> {
     let commits = git::get_commits_in_range(from, to)?;
     if commits.is_empty() {
         println!("No commits found in range {}..{}", from, to);
         return Ok(());
     }
-    let scores = score_commits(&commits, config_path)?;
+    let scores = score_commits(&commits, config, force)?;
     print_and_report(&scores, output)
 }
 
@@ -127,7 +213,8 @@ fn run_history_command(
     to: Option<&str>,
     days: Option<u32>,
     output: Option<&str>,
-    config_path: &str,
+    config: Config,
+    force: bool,
 ) -> Result<()> {
     let (from_str, to_str) = if let Some(d) = days {
         let to_date = Utc::now().format("%Y-%m-%d").to_string();
@@ -146,35 +233,75 @@ fn run_history_command(
         println!("No commits found between {} and {}", from_str, to_str);
         return Ok(());
     }
-    let scores = score_commits(&commits, config_path)?;
+    let scores = score_commits(&commits, config, force)?;
     print_and_report(&scores, output)
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config_path = cli.config.as_str();
-    match cli.command {
-        Commands::Score => {
-            let score = run_score_command(config_path)?;
-            print_score(&score);
-        }
-        Commands::Range { from, to, output } => {
-            run_range_command(&from, &to, output.as_deref(), config_path)?;
-        }
-        Commands::History {
-            from,
-            to,
-            days,
-            output,
-        } => {
-            run_history_command(
-                from.as_deref(),
-                to.as_deref(),
-                days,
-                output.as_deref(),
-                config_path,
-            )?;
+    let config = load_config(cli.config.as_str())?;
+
+    let mut stashed_for_dirty_tree = false;
+    if git::is_head_diff_dirty()? {
+        let is_term = std::io::stdin().is_terminal();
+        let mut stdin = std::io::stdin().lock();
+        let mut stdout = std::io::stdout().lock();
+        if matches!(
+            prompt_stash_dirty_worktree(&mut stdin, &mut stdout, is_term)?,
+            DirtyWorktreeStashChoice::Stash
+        ) {
+            git::stash_push_before_command()?;
+            stashed_for_dirty_tree = true;
         }
     }
-    Ok(())
+
+    let cmd_result = (|| -> Result<()> {
+        match cli.command {
+            Commands::Score { force } => {
+                run_score_command(config, force)?;
+            }
+            Commands::Range {
+                from,
+                to,
+                output,
+                force,
+            } => {
+                run_range_command(&from, &to, output.as_deref(), config, force)?;
+            }
+            Commands::History {
+                from,
+                to,
+                days,
+                output,
+                force,
+            } => {
+                run_history_command(
+                    from.as_deref(),
+                    to.as_deref(),
+                    days,
+                    output.as_deref(),
+                    config,
+                    force,
+                )?;
+            }
+        }
+        Ok(())
+    })();
+
+    if stashed_for_dirty_tree {
+        match (cmd_result, git::stash_pop()) {
+            // Subcommand and stash pop both succeeded.
+            (Ok(()), Ok(())) => Ok(()),
+            // Subcommand failed; working tree restored.
+            (Err(e), Ok(())) => Err(e),
+            // Subcommand succeeded; stash pop failed.
+            (Ok(()), Err(pop_err)) => Err(pop_err),
+            // Subcommand and stash pop both failed.
+            (Err(cmd_err), Err(pop_err)) => {
+                Err(cmd_err.context(format!("`git stash pop` also failed: {pop_err}")))
+            }
+        }
+    } else {
+        cmd_result
+    }
 }
