@@ -290,9 +290,13 @@ fn main() -> Result<()> {
 
     if stashed_for_dirty_tree {
         match (cmd_result, git::stash_pop()) {
+            // Subcommand and stash pop both succeeded.
             (Ok(()), Ok(())) => Ok(()),
+            // Subcommand failed; working tree restored.
             (Err(e), Ok(())) => Err(e),
+            // Subcommand succeeded; stash pop failed.
             (Ok(()), Err(pop_err)) => Err(pop_err),
+            // Subcommand and stash pop both failed.
             (Err(cmd_err), Err(pop_err)) => {
                 Err(cmd_err.context(format!("`git stash pop` also failed: {pop_err}")))
             }
