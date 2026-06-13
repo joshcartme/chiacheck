@@ -112,10 +112,10 @@ impl Db {
     }
 }
 
-/// Resolve the database file path from config (defaults to `fiber.db` in CWD).
+/// Resolve the database file path from config (defaults to `chiacheck.db` in CWD).
 pub fn resolved_db_path(database: &DatabaseConfig) -> PathBuf {
     let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    base.join(database.path.as_deref().unwrap_or("fiber.db"))
+    base.join(database.path.as_deref().unwrap_or("chiacheck.db"))
 }
 
 #[cfg(test)]
@@ -126,7 +126,7 @@ mod tests {
     use chrono::Utc;
     use tempfile::NamedTempFile;
 
-    const TEST_CONFIG_PATH: &str = "fiber.toml";
+    const TEST_CONFIG_PATH: &str = "chiacheck.toml";
 
     #[test]
     fn migrations_are_valid() {
@@ -288,14 +288,14 @@ mod tests {
         score_b.overall = 42.0;
         let metrics = sample_metrics();
 
-        db.upsert_score(sha, "fiber.toml", &score_a, &metrics)
+        db.upsert_score(sha, "chiacheck.toml", &score_a, &metrics)
             .unwrap();
-        db.upsert_score(sha, "configs/fiber.strict.toml", &score_b, &metrics)
+        db.upsert_score(sha, "configs/chiacheck.strict.toml", &score_b, &metrics)
             .unwrap();
 
-        let loaded_a = db.get_score(sha, "fiber.toml").unwrap().unwrap();
+        let loaded_a = db.get_score(sha, "chiacheck.toml").unwrap().unwrap();
         let loaded_b = db
-            .get_score(sha, "configs/fiber.strict.toml")
+            .get_score(sha, "configs/chiacheck.strict.toml")
             .unwrap()
             .unwrap();
         assert_eq!(loaded_a.overall, 1.0);

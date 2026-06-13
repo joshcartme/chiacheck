@@ -1,8 +1,11 @@
 [package]
-name = "fiber"
+name = "chiacheck"
 version = "0.1.0"
 edition = "2024"
 description = "A frontend health score calculator"
+license = "MIT"
+repository = "https://github.com/joshcartme/chiacheck"
+homepage = "https://github.com/joshcartme/chiacheck"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

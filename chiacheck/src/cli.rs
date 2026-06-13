@@ -2,7 +2,11 @@ use crate::config::DEFAULT_CONFIG;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "fiber", about = "Frontend health score calculator", version)]
+#[command(
+    name = "chiacheck",
+    about = "Frontend health score calculator",
+    version
+)]
 pub struct Cli {
     /// Path to the config file
     #[arg(long, global = true, default_value = DEFAULT_CONFIG)]

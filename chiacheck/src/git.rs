@@ -1,4 +1,4 @@
-use crate::error::FiberError;
+use crate::error::ChiacheckError;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::process::{Command, ExitStatus, Stdio};
@@ -25,7 +25,7 @@ fn run_git_raw(args: &[&str], discard_stdout: bool) -> Result<GitRun> {
     }
     let output = cmd
         .output()
-        .map_err(|e| FiberError::Git(format!("Failed to run git: {}", e)))?;
+        .map_err(|e| ChiacheckError::Git(format!("Failed to run git: {}", e)))?;
 
     Ok(GitRun {
         status: output.status,
@@ -39,7 +39,7 @@ fn run_git_raw(args: &[&str], discard_stdout: bool) -> Result<GitRun> {
 }
 
 fn git_command_failed(args: &[&str], stderr: &str) -> anyhow::Error {
-    FiberError::Git(format!("git {:?} failed: {}", args, stderr)).into()
+    ChiacheckError::Git(format!("git {:?} failed: {}", args, stderr)).into()
 }
 
 /// Run `git` with `args` and return trimmed stdout on success. Stderr is captured
@@ -70,7 +70,7 @@ pub fn is_head_diff_dirty() -> Result<bool> {
     match run.status.code() {
         Some(0) => Ok(false),
         Some(1) => Ok(true),
-        _ => Err(FiberError::Git(format!(
+        _ => Err(ChiacheckError::Git(format!(
             "git diff --quiet HEAD failed: {}",
             run.stderr.trim()
         ))
@@ -83,7 +83,7 @@ pub fn stash_push_before_command() -> Result<()> {
         "stash",
         "push",
         "-m",
-        "fiber: temporary stash before command",
+        "chiacheck: temporary stash before command",
     ])
 }
 
@@ -102,20 +102,20 @@ fn parse_commit_info_lines(output: &str) -> Result<Vec<CommitInfo>> {
         }
 
         let (sha, timestamp) = line.split_once('\t').ok_or_else(|| {
-            FiberError::Git(format!(
+            ChiacheckError::Git(format!(
                 "Malformed git log line {}: expected '<sha>\\t<timestamp>'",
                 index + 1
             ))
         })?;
         if sha.is_empty() {
-            return Err(FiberError::Git(format!(
+            return Err(ChiacheckError::Git(format!(
                 "Malformed git log line {}: empty SHA",
                 index + 1
             ))
             .into());
         }
         let timestamp_unix = timestamp.parse::<i64>().map_err(|e| {
-            FiberError::Git(format!(
+            ChiacheckError::Git(format!(
                 "Malformed git log line {}: invalid timestamp '{}': {}",
                 index + 1,
                 timestamp,
@@ -166,7 +166,7 @@ pub fn get_current_commit_info() -> Result<CommitInfo> {
     commits
         .into_iter()
         .next()
-        .ok_or_else(|| FiberError::Git("git log -1 returned no commits".to_string()).into())
+        .ok_or_else(|| ChiacheckError::Git("git log -1 returned no commits".to_string()).into())
 }
 
 /// Returns the current branch name if HEAD is on a branch, or the commit SHA

@@ -1,10 +1,10 @@
+use chiacheck::cli::Cli;
+use chiacheck::config::{MetricConfig, load_config};
+use chiacheck::metrics::MetricResult;
+use chiacheck::metrics::runner::{run_all_metrics, run_metric};
+use chiacheck::scorer::build_health_score;
 use chrono::Utc;
 use clap::Parser;
-use fiber::cli::Cli;
-use fiber::config::{MetricConfig, load_config};
-use fiber::metrics::MetricResult;
-use fiber::metrics::runner::{run_all_metrics, run_metric};
-use fiber::scorer::build_health_score;
 use std::path::{self, Path, PathBuf};
 use tempfile::TempDir;
 
@@ -55,7 +55,7 @@ fn metric_result(
 
 #[test]
 fn test_config_parsing() {
-    let path = "tests/fixtures/fiber.toml";
+    let path = "tests/fixtures/chiacheck.toml";
     let config = load_config(path).expect("should parse config");
     assert_eq!(
         config.path,
@@ -443,7 +443,7 @@ fn test_failing_command_surfaces_error() {
 
 #[test]
 fn test_get_commits_in_range_no_duplicate() {
-    let result = fiber::git::get_commits_in_range("HEAD", "HEAD");
+    let result = chiacheck::git::get_commits_in_range("HEAD", "HEAD");
     if let Ok(commits) = result {
         assert!(
             commits.is_empty(),
@@ -455,7 +455,7 @@ fn test_get_commits_in_range_no_duplicate() {
 
 #[test]
 fn test_get_commits_in_range_no_duplicate_nonempty() {
-    let commits = match fiber::git::get_commits_in_range("HEAD~1", "HEAD") {
+    let commits = match chiacheck::git::get_commits_in_range("HEAD~1", "HEAD") {
         Ok(c) if !c.is_empty() => c,
         _ => return,
     };
@@ -471,7 +471,7 @@ fn test_get_commits_in_range_no_duplicate_nonempty() {
 
 #[test]
 fn test_get_commits_in_date_range_no_duplicate_nonempty() {
-    let commits = match fiber::git::get_commits_in_date_range("1970-01-01", "2999-12-31") {
+    let commits = match chiacheck::git::get_commits_in_date_range("1970-01-01", "2999-12-31") {
         Ok(c) if !c.is_empty() => c,
         _ => return,
     };
@@ -487,10 +487,10 @@ fn test_get_commits_in_date_range_no_duplicate_nonempty() {
 
 #[test]
 fn test_cli_history_requires_from_and_to_together() {
-    assert!(Cli::try_parse_from(["fiber", "history", "--from", "2024-01-01"]).is_err());
+    assert!(Cli::try_parse_from(["chiacheck", "history", "--from", "2024-01-01"]).is_err());
     assert!(
         Cli::try_parse_from([
-            "fiber",
+            "chiacheck",
             "history",
             "--from",
             "2024-01-01",
@@ -505,7 +505,7 @@ fn test_cli_history_requires_from_and_to_together() {
 fn test_cli_history_days_conflicts_with_date_range() {
     assert!(
         Cli::try_parse_from([
-            "fiber",
+            "chiacheck",
             "history",
             "--days",
             "30",
@@ -516,14 +516,14 @@ fn test_cli_history_days_conflicts_with_date_range() {
         ])
         .is_err()
     );
-    assert!(Cli::try_parse_from(["fiber", "history", "--days", "30"]).is_ok());
+    assert!(Cli::try_parse_from(["chiacheck", "history", "--days", "30"]).is_ok());
 }
 
 // --- ast metric type ----------------------------------------------------------
 
 #[test]
 fn test_ast_count_type_reference_any() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -560,7 +560,7 @@ fn test_ast_count_type_reference_any() {
 
 #[test]
 fn test_ast_comment_startswith() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -596,7 +596,7 @@ fn test_ast_comment_startswith() {
 
 #[test]
 fn test_ast_comment_contains() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -632,7 +632,7 @@ fn test_ast_comment_contains() {
 
 #[test]
 fn test_ast_max_function_lines_counts_functions_and_methods() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -669,7 +669,7 @@ fn test_ast_max_function_lines_counts_functions_and_methods() {
 
 #[test]
 fn test_ast_max_function_lines_counts_concise_arrow_functions() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -705,7 +705,7 @@ fn test_ast_max_function_lines_counts_concise_arrow_functions() {
 
 #[test]
 fn test_ast_max_file_lines_penalizes_excess_lines() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -743,7 +743,7 @@ fn test_ast_max_file_lines_penalizes_excess_lines() {
 
 #[test]
 fn test_ast_multiple_sub_features_is_error() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -773,7 +773,7 @@ fn test_ast_multiple_sub_features_is_error() {
 
 #[test]
 fn test_ast_no_files_match_is_error() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -802,7 +802,7 @@ fn test_ast_no_files_match_is_error() {
 
 #[test]
 fn test_ast_missing_sub_feature_is_error() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -834,7 +834,7 @@ fn test_ast_missing_sub_feature_is_error() {
 
 #[test]
 fn test_lint_text_fallback() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     // Non-JSON text output: 2 lines containing "error", 1 containing "warning".
     // With default penalties: 2×1.0 + 1×0.5 = 2.5 unattributed.
     let config = MetricConfig {
@@ -870,7 +870,7 @@ fn test_lint_text_fallback() {
 
 #[test]
 fn test_ast_count_type_reference_named_type() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -907,7 +907,7 @@ fn test_ast_count_type_reference_named_type() {
 
 #[test]
 fn test_ast_count_type_reference_ts_as_expression() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -942,7 +942,7 @@ fn test_ast_count_type_reference_ts_as_expression() {
 
 #[test]
 fn test_ast_count_type_reference_ast_kind_and_identifier() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -979,7 +979,7 @@ fn test_ast_count_type_reference_ast_kind_and_identifier() {
 
 #[test]
 fn test_ast_count_type_reference_unknown_yields_zero() {
-    use fiber::config::MetricConfig;
+    use chiacheck::config::MetricConfig;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -1015,7 +1015,7 @@ fn test_ast_count_type_reference_unknown_yields_zero() {
 
 #[test]
 fn test_generate_html_report_smoke() {
-    use fiber::report::generate_html_report;
+    use chiacheck::report::generate_html_report;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -1040,7 +1040,7 @@ fn test_generate_html_report_smoke() {
 
 #[test]
 fn test_html_script_escape() {
-    use fiber::report::generate_html_report;
+    use chiacheck::report::generate_html_report;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -1064,7 +1064,7 @@ fn test_html_script_escape() {
 
 #[test]
 fn test_html_escapes_metric_name_and_details() {
-    use fiber::report::generate_html_report;
+    use chiacheck::report::generate_html_report;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -1088,7 +1088,7 @@ fn test_html_escapes_metric_name_and_details() {
 
 #[test]
 fn test_html_script_escape_applies_to_metric_names() {
-    use fiber::report::generate_html_report;
+    use chiacheck::report::generate_html_report;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -1342,8 +1342,8 @@ fn test_run_all_metrics_mixed_ast_non_ast_order() {
 
 #[test]
 fn test_db_enabled_false_no_file_created() {
-    use fiber::config::{Config, DatabaseConfig};
-    use fiber::main_helpers::open_db_if_enabled;
+    use chiacheck::config::{Config, DatabaseConfig};
+    use chiacheck::main_helpers::open_db_if_enabled;
     use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
@@ -1367,8 +1367,8 @@ fn test_db_enabled_false_no_file_created() {
 
 #[test]
 fn test_db_decline_non_interactive_returns_error() {
-    use fiber::config::{Config, DatabaseConfig};
-    use fiber::main_helpers::{DECLINE_CREATE_DB_MSG, open_db_if_enabled_interactive};
+    use chiacheck::config::{Config, DatabaseConfig};
+    use chiacheck::main_helpers::{DECLINE_CREATE_DB_MSG, open_db_if_enabled_interactive};
     use std::io::Cursor;
     use tempfile::tempdir;
 
@@ -1403,29 +1403,29 @@ fn test_db_decline_non_interactive_returns_error() {
 }
 
 #[test]
-fn test_db_omitted_path_defaults_to_fiber_db() {
-    use fiber::config::DatabaseConfig;
-    use fiber::db::resolved_db_path;
+fn test_db_omitted_path_defaults_to_chiacheck_db() {
+    use chiacheck::config::DatabaseConfig;
+    use chiacheck::db::resolved_db_path;
 
     let cfg = DatabaseConfig {
         enabled: true,
         path: None,
     };
     let resolved = resolved_db_path(&cfg);
-    assert_eq!(resolved.file_name().unwrap(), "fiber.db");
+    assert_eq!(resolved.file_name().unwrap(), "chiacheck.db");
 }
 
 #[test]
 fn test_db_cache_hit_and_miss() {
-    use fiber::db::Db;
-    use fiber::scorer::build_health_score;
+    use chiacheck::db::Db;
+    use chiacheck::scorer::build_health_score;
     use tempfile::NamedTempFile;
 
     let tmp = NamedTempFile::new().unwrap();
     let db = Db::open(tmp.path()).unwrap();
 
     let sha = "cafebabe00000000";
-    let config_path = "fiber.toml";
+    let config_path = "chiacheck.toml";
     assert!(
         db.get_score(sha, config_path).unwrap().is_none(),
         "miss before insert"
@@ -1440,15 +1440,15 @@ fn test_db_cache_hit_and_miss() {
 
 #[test]
 fn test_db_force_overwrites_cached() {
-    use fiber::db::Db;
-    use fiber::scorer::build_health_score;
+    use chiacheck::db::Db;
+    use chiacheck::scorer::build_health_score;
     use tempfile::NamedTempFile;
 
     let tmp = NamedTempFile::new().unwrap();
     let db = Db::open(tmp.path()).unwrap();
 
     let sha = "0000000000000001";
-    let config_path = "fiber.toml";
+    let config_path = "chiacheck.toml";
     let mut score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
     score.overall = 5.0;
     db.upsert_score(sha, config_path, &score, &[]).unwrap();
@@ -1463,25 +1463,27 @@ fn test_db_force_overwrites_cached() {
 
 #[test]
 fn test_db_get_nonexistent_returns_none() {
-    use fiber::db::Db;
+    use chiacheck::db::Db;
     use tempfile::NamedTempFile;
 
     let tmp = NamedTempFile::new().unwrap();
     let db = Db::open(tmp.path()).unwrap();
-    let result = db.get_score("does_not_exist_sha", "fiber.toml").unwrap();
+    let result = db
+        .get_score("does_not_exist_sha", "chiacheck.toml")
+        .unwrap();
     assert!(result.is_none());
 }
 
 #[test]
 fn test_db_timestamp_column_matches_score() {
-    use fiber::db::Db;
-    use fiber::scorer::build_health_score;
+    use chiacheck::db::Db;
+    use chiacheck::scorer::build_health_score;
     use tempfile::NamedTempFile;
 
     let tmp = NamedTempFile::new().unwrap();
     let db = Db::open(tmp.path()).unwrap();
     let sha = "timestamp_test_sha";
-    let config_path = "fiber.toml";
+    let config_path = "chiacheck.toml";
     let score = build_health_score(vec![], Some(sha.to_string()), chrono::Utc::now());
     let expected_ts = score.timestamp.timestamp();
     db.upsert_score(sha, config_path, &score, &[]).unwrap();

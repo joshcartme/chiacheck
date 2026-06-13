@@ -169,7 +169,7 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fiber Penalty Report</title>
+<title>Chiacheck Penalty Report</title>
 <!-- Pin to a specific version; verify SRI hash before deploying to production -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js" integrity="sha512-Y51n9mtKTVBh3Jbx5pZSJNDDMyY+yGe77DGtBPzRlgsf/YLCh13kSZ3JmfHGzYFCmOndraf0sQgfM654b7dJ3w==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><style>
   body {{ font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }}
@@ -184,7 +184,7 @@ fn build_html(scores: &[HealthScore]) -> Result<String> {
 </style>
 </head>
 <body>
-<h1>🧵 Fiber Penalty Report</h1>
+<h1>🧵 Chiacheck Penalty Report</h1>
 <p class="subtitle">Generated {} &mdash; lower is better, 0 = perfect</p>
 <div class="chart-container">
   <canvas id="chart"></canvas>

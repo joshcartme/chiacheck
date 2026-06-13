@@ -28,9 +28,9 @@ pub fn run() -> Result<()> {
         );
         eprintln!();
         eprintln!("Regenerate the AstType map: `cargo xtask gen-ast-type-map`,");
-        eprintln!("then verify `fiber` builds and tests pass, update code if needed, and");
+        eprintln!("then verify `chiacheck` builds and tests pass, update code if needed, and");
         eprintln!(
-            "stage `fiber/src/metrics/ast_type_map.rs` together with `Cargo.toml` before committing."
+            "stage `chiacheck/src/metrics/ast_type_map.rs` together with `Cargo.toml` before committing."
         );
         std::process::exit(1);
     }

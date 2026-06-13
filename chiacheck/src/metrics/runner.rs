@@ -192,7 +192,7 @@ fn dispatch(
     }
 }
 
-/// `working_directory` is normally the process current working directory where Fiber was started
+/// `working_directory` is normally the process current working directory where Chiacheck was started
 /// (how the CLI invokes this function). It need not be a repository root. It is used to resolve
 /// glob patterns and to strip prefixes for attributed paths.
 pub fn run_metric(config: &MetricConfig, working_directory: &Path) -> MetricResult {
@@ -202,7 +202,7 @@ pub fn run_metric(config: &MetricConfig, working_directory: &Path) -> MetricResu
 /// Run all metrics, sharing pre-read source files across AST metrics and
 /// executing each metric in parallel on the rayon thread pool.
 ///
-/// `working_directory` is normally the process current working directory where Fiber was started
+/// `working_directory` is normally the process current working directory where Chiacheck was started
 /// (how the CLI invokes this function). It need not be a repository root. It is used to resolve
 /// glob patterns and to strip prefixes for attributed paths.
 pub fn run_all_metrics(configs: &[MetricConfig], working_directory: &Path) -> Vec<MetricResult> {

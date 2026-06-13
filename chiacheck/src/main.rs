@@ -1,16 +1,16 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
-use clap::Parser;
-use fiber::cli::{Cli, Commands};
-use fiber::config::{Config, load_config};
-use fiber::git::CommitInfo;
-use fiber::main_helpers::{
+use chiacheck::cli::{Cli, Commands};
+use chiacheck::config::{Config, load_config};
+use chiacheck::git::CommitInfo;
+use chiacheck::main_helpers::{
     CachedAction, DirtyWorktreeStashChoice, open_db_if_enabled_interactive, prompt_cached_action,
     prompt_stash_dirty_worktree,
 };
-use fiber::metrics::runner::run_all_metrics;
-use fiber::scorer::{HealthScore, build_health_score};
-use fiber::{git, report};
+use chiacheck::metrics::runner::run_all_metrics;
+use chiacheck::scorer::{HealthScore, build_health_score};
+use chiacheck::{git, report};
+use chrono::{DateTime, Utc};
+use clap::Parser;
 use std::io::IsTerminal;
 
 fn print_score(score: &HealthScore) {

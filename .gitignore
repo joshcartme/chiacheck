@@ -1,3 +1,8 @@
 /target
-fiber.toml
+chiacheck.toml
 .worktrees
+
+# npm release build outputs (assembled by scripts/assemble-npm-packages.mjs)
+/artifacts
+/npm/dist
+node_modules
