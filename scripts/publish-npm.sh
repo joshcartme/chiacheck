@@ -14,8 +14,8 @@ DIST="${1:-npm/dist}"
 publish_pkg() {
   local dir="$1"
   local name version
-  name=$(node -p "require('$dir/package.json').name")
-  version=$(node -p "require('$dir/package.json').version")
+  name=$(jq -er .name "$dir/package.json")
+  version=$(jq -er .version "$dir/package.json")
   if npm view "$name@$version" version >/dev/null 2>&1; then
     echo "skip   $name@$version (already published)"
     return 0
