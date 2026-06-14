@@ -4,12 +4,38 @@
 
 ---
 
+## Table of Contents
+
+- [Installation](#installation)
+  - [npm (prebuilt binary)](#npm-prebuilt-binary)
+  - [From source](#from-source)
+- [Development (workspace)](#development-workspace)
+- [Quick Start](#quick-start)
+- [Configuration Reference](#configuration-reference)
+  - [Common fields](#common-fields)
+  - [Type-specific fields](#type-specific-fields)
+- [Metric Types](#metric-types)
+  - [`lint`](#lint)
+  - [`coverage`](#coverage)
+  - [`count`](#count)
+  - [`percentage`](#percentage)
+  - [`score`](#score)
+  - [`ast`](#ast)
+- [`chiacheck score`](#chiacheck-score)
+- [`chiacheck range`](#chiacheck-range)
+- [`chiacheck history`](#chiacheck-history)
+- [SQLite Score Cache](#sqlite-score-cache)
+- [HTML Report](#html-report)
+- [Custom Metrics Guide](#custom-metrics-guide)
+
+---
+
 ## Installation
 
 ### npm (prebuilt binary)
 
 ```bash
-npm install -g chiacheck
+npm install chiacheck
 # or run without installing:
 npx chiacheck score
 ```
@@ -19,7 +45,11 @@ via `optionalDependencies` (`@chiacheck/<platform>`) — no Rust toolchain or co
 Supported: macOS (arm64/x64), Linux (x64/arm64, glibc), Windows (x64). musl/Alpine is not yet
 supported.
 
-### From source
+---
+
+## Development
+
+### Build from source
 
 ```bash
 git clone https://github.com/joshcartme/chiacheck
@@ -28,9 +58,7 @@ cargo build --release
 # Binary is at target/release/chiacheck
 ```
 
----
-
-## Development (workspace)
+### Development tasks
 
 This repo is a Cargo **workspace** (`chiacheck` + `xtask`). Developer automation uses **`cargo xtask`** ([cargo-xtask](https://github.com/matklad/cargo-xtask)):
 
