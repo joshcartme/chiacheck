@@ -21,7 +21,7 @@
 // mistagged release fails fast instead of publishing a mismatch.
 
 import { existsSync, readFileSync, rmSync, mkdirSync, copyFileSync, writeFileSync, chmodSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -87,6 +87,13 @@ function main() {
   const artifactsDir = resolve(repoRoot, opts.artifacts);
   const outDir = resolve(repoRoot, opts.out);
   const licenseSrc = join(repoRoot, "LICENSE");
+  // Safety: we recursively delete outDir, so refuse anything that isn't strictly
+  // inside the repo. `relative` is "" when equal, starts with ".." when outside,
+  // and is absolute across drives on Windows — reject all three.
+  const outRel = relative(repoRoot, outDir);
+  if (outRel === "" || outRel.startsWith("..") || isAbsolute(outRel)) {
+    fail(`refusing to use --out "${opts.out}": resolves to ${outDir}, which is not inside the repository (${repoRoot})`);
+  }
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
 
