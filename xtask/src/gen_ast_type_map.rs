@@ -1,4 +1,4 @@
-//! Generate `fiber/src/metrics/ast_type_map.rs` from `oxc_ast`'s generated `ast_kind.rs`.
+//! Generate `chiacheck/src/metrics/ast_type_map.rs` from `oxc_ast`'s generated `ast_kind.rs`.
 
 use crate::util::workspace_root;
 use anyhow::{Context, Result};
@@ -26,7 +26,7 @@ pub fn run() -> Result<()> {
         ast_type_max as usize + 1
     );
 
-    let out_path = workspace_root.join("fiber/src/metrics/ast_type_map.rs");
+    let out_path = workspace_root.join("chiacheck/src/metrics/ast_type_map.rs");
     let contents = generate_file_contents(&version, &variants);
 
     if let Some(parent) = out_path.parent() {

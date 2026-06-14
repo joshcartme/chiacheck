@@ -1,12 +1,12 @@
-# AGENTS.md - Fiber CLI Crate
+# AGENTS.md - Chiacheck CLI Crate
 
-Fiber workspace specific guidance. Keep this file terse and agent-focused; target ~120 lines, max 140.
+Chiacheck workspace specific guidance. Keep this file terse and agent-focused; target ~120 lines, max 140.
 
 ## Agent Rules
 
 - Keep `src/main.rs` orchestration-only; put domain behavior in library modules.
-- Use `FiberError` inside library internals when preserving failure category matters.
-- Public APIs often return `anyhow::Result<T>` while constructing `FiberError`; keep that boundary unless intentionally refactoring.
+- Use `ChiacheckError` inside library internals when preserving failure category matters.
+- Public APIs often return `anyhow::Result<T>` while constructing `ChiacheckError`; keep that boundary unless intentionally refactoring.
 - `run_metric` is infallible: return `MetricResult`, never `Result`; failures use zero penalties and `details` starting `Error:`.
 - Config/docs/tests move together for user-facing behavior changes.
 
@@ -16,9 +16,9 @@ Fiber workspace specific guidance. Keep this file terse and agent-focused; targe
 - `src/main_helpers.rs`: interactive prompts (missing DB file, use DB vs clean run, dirty-tree stash).
 - `src/db.rs`: SQLite score cache (`get_score` / `upsert_score`; key is `(commit_hash, config_path)`).
 - `src/lib.rs`: exposes library modules.
-- `src/cli.rs`: clap definitions; `--config` is `global = true`; default is `fiber.toml`.
+- `src/cli.rs`: clap definitions; `--config` is `global = true`; default is `chiacheck.toml`.
 - `src/config.rs`: TOML schema, `MetricConfig`, `AstFeature` / `parse_ast_feature`, duplicate metric-name rejection; `load_config` stores absolutized `Config.path`; `Config::repo_relative_config_path` for DB cache keys.
-- `src/error.rs`: `FiberError`.
+- `src/error.rs`: `ChiacheckError`.
 - `src/git.rs`: git wrappers plus commit/date range traversal.
 - `src/metrics/mod.rs`: `MetricResult`.
 - `src/metrics/ast_type_map.rs`: generated `AstType` string map (`cargo xtask gen-ast-type-map`); see workspace root `AGENTS.md`.
@@ -27,14 +27,14 @@ Fiber workspace specific guidance. Keep this file terse and agent-focused; targe
 - `src/report.rs`: HTML report generation and escaping.
 - `tests/integration_test.rs`: integration coverage.
 - `tests/fixtures/`: test configs and fixtures.
-- `README.md` and `fiber.example.toml`: keep synced with config/CLI behavior.
+- `README.md` and `chiacheck.example.toml`: keep synced with config/CLI behavior.
 
 ## Commands
 
 ```bash
-cargo fiber score
-cargo fiber range --from <SHA> --to <SHA> --output report.html
-cargo fiber history --days 30 --output history.html
+cargo chiacheck score
+cargo chiacheck range --from <SHA> --to <SHA> --output report.html
+cargo chiacheck history --days 30 --output history.html
 ```
 
 ## Key Types
@@ -94,7 +94,7 @@ cargo fiber history --days 30 --output history.html
 
 ## Common Tasks
 
-- Add/change metric type: update `src/metrics/runner.rs` (and `src/config.rs` for `ast` sub-features / `AstFeature`), README config docs, `fiber.example.toml` if relevant, and integration tests.
+- Add/change metric type: update `src/metrics/runner.rs` (and `src/config.rs` for `ast` sub-features / `AstFeature`), README config docs, `chiacheck.example.toml` if relevant, and integration tests.
 - Change CLI or cache/DB flow: update `src/cli.rs`, `src/main.rs` / `src/main_helpers.rs`, `src/db.rs`, README SQLite section.
 - Change scoring: update `src/scorer.rs`; preserve penalty accumulation semantics and add focused tests.
 - Change git range semantics: update `src/git.rs` and tests for chronological, duplicate-free output.
@@ -111,6 +111,6 @@ cargo fiber history --days 30 --output history.html
 
 ## Docs Sync
 
-- Config fields or metric semantics: update `README.md`, `fiber.example.toml`, and tests.
+- Config fields or metric semantics: update `README.md`, `chiacheck.example.toml`, and tests.
 - CLI flags/subcommands: update `src/cli.rs` and README CLI docs.
 - Report structure/escaping: update tests and keep HTML safety guidance accurate.

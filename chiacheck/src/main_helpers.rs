@@ -115,7 +115,7 @@ pub fn prompt_cached_action<R: BufRead, W: Write>(
     }
 }
 
-pub const DECLINE_CREATE_DB_MSG: &str = "Fiber is configured to use a database but the file does not exist. \
+pub const DECLINE_CREATE_DB_MSG: &str = "Chiacheck is configured to use a database but the file does not exist. \
      Set `enabled = false` under `[database]` or remove the `[database]` section \
      from your config if you do not want to use a database, then run again.";
 

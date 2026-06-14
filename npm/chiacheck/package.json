@@ -1,0 +1,40 @@
+{
+  "name": "chiacheck",
+  "version": "0.1.0",
+  "description": "A frontend health score calculator",
+  "keywords": [
+    "frontend",
+    "health",
+    "lint",
+    "metrics",
+    "cli"
+  ],
+  "homepage": "https://github.com/joshcartme/chiacheck#readme",
+  "bugs": {
+    "url": "https://github.com/joshcartme/chiacheck/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joshcartme/chiacheck.git"
+  },
+  "license": "MIT",
+  "author": "Josh Cartmell",
+  "type": "commonjs",
+  "bin": {
+    "chiacheck": "bin/chiacheck.js"
+  },
+  "files": [
+    "bin/",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "optionalDependencies": {
+    "@chiacheck/darwin-arm64": "0.1.0",
+    "@chiacheck/darwin-x64": "0.1.0",
+    "@chiacheck/linux-x64": "0.1.0",
+    "@chiacheck/linux-arm64": "0.1.0",
+    "@chiacheck/win32-x64": "0.1.0"
+  }
+}

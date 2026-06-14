@@ -1,4 +1,4 @@
-use crate::error::FiberError;
+use crate::error::ChiacheckError;
 use crate::git;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{self, PathBuf};
 
-pub const DEFAULT_CONFIG: &str = "fiber.toml";
+pub const DEFAULT_CONFIG: &str = "chiacheck.toml";
 
 /// Exactly one variant must apply when [`MetricConfig::metric_type`] is `"ast"`.
 pub(crate) enum AstFeature {
@@ -81,7 +81,7 @@ impl MetricConfig {
 pub struct DatabaseConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// Omitted in TOML → `None`; resolve with `path.as_deref().unwrap_or("fiber.db")` against CWD.
+    /// Omitted in TOML → `None`; resolve with `path.as_deref().unwrap_or("chiacheck.db")` against CWD.
     #[serde(default)]
     pub path: Option<String>,
 }
@@ -124,14 +124,14 @@ impl Config {
 pub fn load_config(path: &str) -> Result<Config> {
     let config_path = path::absolute(path).context("Failed to resolve config path")?;
     let content = fs::read_to_string(&config_path).map_err(|e| {
-        FiberError::Config(format!(
+        ChiacheckError::Config(format!(
             "Cannot read {}: {}",
             config_path.to_string_lossy(),
             e
         ))
     })?;
     let mut config: Config = toml::from_str(&content).map_err(|e| {
-        FiberError::Config(format!(
+        ChiacheckError::Config(format!(
             "Invalid TOML in {}: {}",
             config_path.to_string_lossy(),
             e
@@ -147,7 +147,7 @@ pub fn load_config(path: &str) -> Result<Config> {
         }
     }
     if !duplicates.is_empty() {
-        return Err(FiberError::Config(format!(
+        return Err(ChiacheckError::Config(format!(
             "Duplicate metric names in {}: {}",
             config_path.to_string_lossy(),
             duplicates.join(", ")
@@ -165,22 +165,25 @@ mod tests {
 
     #[test]
     fn repo_relative_config_path_resolves_fixture_config() {
-        let path = format!("{}/tests/fixtures/fiber.toml", env!("CARGO_MANIFEST_DIR"));
+        let path = format!(
+            "{}/tests/fixtures/chiacheck.toml",
+            env!("CARGO_MANIFEST_DIR")
+        );
         let config = load_config(&path).unwrap();
         let relative = config.repo_relative_config_path().unwrap();
         assert!(
-            relative.ends_with("tests/fixtures/fiber.toml"),
+            relative.ends_with("tests/fixtures/chiacheck.toml"),
             "expected repo-relative fixture path, got {relative}"
         );
     }
 
     #[test]
     fn repo_relative_config_path_resolves_example_config() {
-        let path = format!("{}/fiber.example.toml", env!("CARGO_MANIFEST_DIR"));
+        let path = format!("{}/chiacheck.example.toml", env!("CARGO_MANIFEST_DIR"));
         let config = load_config(&path).unwrap();
         let relative = config.repo_relative_config_path().unwrap();
         assert!(
-            relative.ends_with("fiber.example.toml"),
+            relative.ends_with("chiacheck.example.toml"),
             "expected repo-relative example config path, got {relative}"
         );
     }

@@ -1,32 +1,46 @@
-# 🧵 Fiber
+# 🧵 Chiacheck
 
-**Fiber** is a CLI tool that measures the health of a frontend project by running configurable metrics (linting, test coverage, type errors, custom scripts) and accumulating a **penalty score**. A score of `0` is perfect; higher values mean more issues were found. It can also compute scores over a range of git commits and generate an HTML trend report.
+**Chiacheck** is a CLI tool that measures the health of a frontend project by running configurable metrics (linting, test coverage, type errors, custom scripts) and accumulating a **penalty score**. A score of `0` is perfect; higher values mean more issues were found. It can also compute scores over a range of git commits and generate an HTML trend report.
 
 ---
 
 ## Installation
 
+### npm (prebuilt binary)
+
 ```bash
-# Clone and build from source
-git clone <your-fiber-repo-url>
-cd fiber
+npm install -g chiacheck
+# or run without installing:
+npx chiacheck score
+```
+
+The `chiacheck` npm package is a thin launcher that pulls in a prebuilt binary for your platform
+via `optionalDependencies` (`@chiacheck/<platform>`) — no Rust toolchain or compilation needed.
+Supported: macOS (arm64/x64), Linux (x64/arm64, glibc), Windows (x64). musl/Alpine is not yet
+supported.
+
+### From source
+
+```bash
+git clone https://github.com/joshcartme/chiacheck
+cd chiacheck
 cargo build --release
-# Binary is at target/release/fiber
+# Binary is at target/release/chiacheck
 ```
 
 ---
 
 ## Development (workspace)
 
-This repo is a Cargo **workspace** (`fiber` + `xtask`). Developer automation uses **`cargo xtask`** ([cargo-xtask](https://github.com/matklad/cargo-xtask)):
+This repo is a Cargo **workspace** (`chiacheck` + `xtask`). Developer automation uses **`cargo xtask`** ([cargo-xtask](https://github.com/matklad/cargo-xtask)):
 
-- **`cargo xtask gen-ast-type-map`** — Regenerate `fiber/src/metrics/ast_type_map.rs` after changing the workspace-pinned `oxc_ast` version in the root `Cargo.toml`.
+- **`cargo xtask gen-ast-type-map`** — Regenerate `chiacheck/src/metrics/ast_type_map.rs` after changing the workspace-pinned `oxc_ast` version in the root `Cargo.toml`.
 - **`cargo xtask check-oxc-version`** — Pre-commit helper: fails if staged root `Cargo.toml` changes `workspace.dependencies.oxc_ast` without you addressing the map (see workspace `AGENTS.md` for hook setup).
 - **`cargo xtask bench <TARGET_DIR> <RUNS>`**:
     1. Builds the current branch with `cargo build --release`
-    2. Times `fiber score` N times in `TARGET_DIR`
+    2. Times `chiacheck score` N times in `TARGET_DIR`
     3. Creates a temporary git worktree for main under `target/\_bench_main_worktree` and builds it
-    4. Times `fiber score` N times on the main binary
+    4. Times `chiacheck score` N times on the main binary
     5. Cleans up the worktree (even on failure)
     6. Prints per-run timings, averages, and a Δ line showing the difference in seconds and percentage
 
@@ -37,20 +51,20 @@ This repo is a Cargo **workspace** (`fiber` + `xtask`). Developer automation use
 1. Copy the example config and customise it:
 
 ```bash
-cp fiber.example.toml fiber.toml
+cp chiacheck.example.toml chiacheck.toml
 ```
 
 2. Run a score for the current state:
 
 ```bash
-fiber score
+chiacheck score
 ```
 
 ---
 
 ## Configuration Reference
 
-Fiber reads `fiber.toml` from the current working directory by default (override with `--config`). The file contains an array of `[[metrics]]` tables. Glob patterns in metrics (for example `files` on `ast` metrics) and the working directory for spawned metric commands are both resolved **relative to the process current working directory** — not relative to the directory containing the config file. Run Fiber from your repository root (or `cd` there in scripts) so paths match your project layout.
+Chiacheck reads `chiacheck.toml` from the current working directory by default (override with `--config`). The file contains an array of `[[metrics]]` tables. Glob patterns in metrics (for example `files` on `ast` metrics) and the working directory for spawned metric commands are both resolved **relative to the process current working directory** — not relative to the directory containing the config file. Run Chiacheck from your repository root (or `cd` there in scripts) so paths match your project layout.
 
 ### Common fields
 
@@ -81,7 +95,7 @@ Fiber reads `fiber.toml` from the current working directory by default (override
 
 Runs a linter via shell `command` and computes penalty from its output. Prefers a **JSON array** of per-file objects with `filePath`, `errorCount`, and `warningCount` (ESLint `--format json` shape). Penalties are **attributed per file**. If JSON parsing fails, falls back to counting lines containing `error` or `warning` (case-insensitive); those penalties are **unattributed**.
 
-For ESLint-compatible exit codes, Fiber still parses stdout when the process exits **0** (no errors, warnings within `--max-warnings`) or **1** (lint findings). Exit code **2** or any other code is treated as a failed run; Fiber surfaces stdout and stderr in the error details so configuration or runtime failures are visible.
+For ESLint-compatible exit codes, Chiacheck still parses stdout when the process exits **0** (no errors, warnings within `--max-warnings`) or **1** (lint findings). Exit code **2** or any other code is treated as a failed run; Chiacheck surfaces stdout and stderr in the error details so configuration or runtime failures are visible.
 
 Other metric types that run a shell command accept only exit **0** before stdout is parsed.
 
@@ -179,7 +193,7 @@ Parses JavaScript and TypeScript files in-process with [oxc-parser](https://oxc.
 
 **Common fields:**
 
-- `files` — one or more glob patterns for source files, resolved relative to the **current working directory** when Fiber runs
+- `files` — one or more glob patterns for source files, resolved relative to the **current working directory** when Chiacheck runs
 - `error_penalty` — penalty per match (default: `1.0`)
 
 **Penalty per file** = `match_count × error_penalty`
@@ -260,19 +274,19 @@ error_penalty = 1.0
 
 ---
 
-### `fiber score`
+### `chiacheck score`
 
 Calculate the health score for the current `HEAD` commit.
 
 ```bash
-fiber score [--force]
+chiacheck score [--force]
 ```
 
 | Flag       | Description                                                  |
 | ---------- | ------------------------------------------------------------ |
 | `--force`  | Bypass cache; always recompute and overwrite cached scores   |
 
-Uses the configuration loaded at startup (see [Configuration Reference](#configuration-reference)), resolves `HEAD` via `git log -1` (SHA and commit timestamp), runs all metrics, and prints coloured output. With the [SQLite score cache](#sqlite-score-cache) enabled, behavior matches `range` / `history`: Fiber may reuse a cached row or check out `HEAD` to score, then restore your previous branch or detached state. Outside a git repository, Fiber scores the working tree once with no commit SHA and does not use the database.
+Uses the configuration loaded at startup (see [Configuration Reference](#configuration-reference)), resolves `HEAD` via `git log -1` (SHA and commit timestamp), runs all metrics, and prints coloured output. With the [SQLite score cache](#sqlite-score-cache) enabled, behavior matches `range` / `history`: Chiacheck may reuse a cached row or check out `HEAD` to score, then restore your previous branch or detached state. Outside a git repository, Chiacheck scores the working tree once with no commit SHA and does not use the database.
 
 Example output:
 
@@ -289,12 +303,12 @@ Color coding: green if overall penalty is `0`, yellow if `≤10.0`, red otherwis
 
 ---
 
-### `fiber range`
+### `chiacheck range`
 
 Calculate health scores for a range of git commits.
 
 ```bash
-fiber range --from <SHA> --to <SHA> [--output report.html]
+chiacheck range --from <SHA> --to <SHA> [--output report.html]
 ```
 
 | Flag       | Description                                                  |
@@ -304,20 +318,20 @@ fiber range --from <SHA> --to <SHA> [--output report.html]
 | `--output` | Optional path to write an HTML report                        |
 | `--force`  | Bypass cache; always recompute and overwrite cached scores   |
 
-Fiber will check out each commit in the git range `from..to`, run metrics against that revision of the tree (using the same metric definitions loaded at the start of the run), restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
+Chiacheck will check out each commit in the git range `from..to`, run metrics against that revision of the tree (using the same metric definitions loaded at the start of the run), restore the original HEAD, then print all scores. If `--output` is provided it also writes an interactive HTML chart.
 
 ```bash
-fiber range --from abc1234 --to def5678 --output report.html
+chiacheck range --from abc1234 --to def5678 --output report.html
 ```
 
 ---
 
-### `fiber history`
+### `chiacheck history`
 
 Calculate health scores for commits within a date range.
 
 ```bash
-fiber history [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days N] [--output report.html]
+chiacheck history [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days N] [--output report.html]
 ```
 
 | Flag       | Description                           |
@@ -328,25 +342,25 @@ fiber history [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days N] [--output report.
 | `--output` | Optional path to write an HTML report |
 | `--force`  | Bypass cache; always recompute        |
 
-Use either `--days` or the pair `--from` and `--to`. The date range is passed to git as `--after=<from>` and `--before=<to>`, so it follows git's date parsing and boundary behavior. As with `range`, each checkout uses the repository state at that commit while metric definitions stay those from the config Fiber loaded at startup.
+Use either `--days` or the pair `--from` and `--to`. The date range is passed to git as `--after=<from>` and `--before=<to>`, so it follows git's date parsing and boundary behavior. As with `range`, each checkout uses the repository state at that commit while metric definitions stay those from the config Chiacheck loaded at startup.
 
 ```bash
 # Last 30 days, with HTML output
-fiber history --days 30 --output history.html
+chiacheck history --days 30 --output history.html
 
 # Specific date range
-fiber history --from 2024-01-01 --to 2024-03-31 --output q1.html
+chiacheck history --from 2024-01-01 --to 2024-03-31 --output q1.html
 ```
 
 ---
 
 ## SQLite Score Cache
 
-Fiber can persist scores to a local SQLite database so repeated runs reuse cached results. Database use is **opt-in**: add a `[database]` section with `enabled = true` to your `fiber.toml`.
+Chiacheck can persist scores to a local SQLite database so repeated runs reuse cached results. Database use is **opt-in**: add a `[database]` section with `enabled = true` to your `chiacheck.toml`.
 
-Cached rows are keyed by **commit hash** and the **repo-relative path** to the config file (for example `fiber.toml` or `configs/strict.toml`). The same commit can therefore have separate cached scores when you run Fiber with different `--config` files in one repository.
+Cached rows are keyed by **commit hash** and the **repo-relative path** to the config file (for example `chiacheck.toml` or `configs/strict.toml`). The same commit can therefore have separate cached scores when you run Chiacheck with different `--config` files in one repository.
 
-### Minimal config (uses `fiber.db` in CWD)
+### Minimal config (uses `chiacheck.db` in CWD)
 
 ```toml
 [database]
@@ -358,22 +372,22 @@ enabled = true
 ```toml
 [database]
 enabled = true
-path = "./scores/fiber.db"
+path = "./scores/chiacheck.db"
 ```
 
-`path` is resolved relative to the current working directory. When `path` is omitted, `fiber.db` in the CWD is used.
+`path` is resolved relative to the current working directory. When `path` is omitted, `chiacheck.db` in the CWD is used.
 
 ### Missing-file prompt
 
-If `enabled = true` but the database file does not exist yet, Fiber asks:
+If `enabled = true` but the database file does not exist yet, Chiacheck asks:
 
 ```
-Database file fiber.db does not exist. (c)reate it / (q)uit [q]:
+Database file chiacheck.db does not exist. (c)reate it / (q)uit [q]:
 ```
 
-- **Accept (`c`)** — Fiber creates the file (and any parent directories) then continues.
-- **Decline or empty line (`q`)** — Fiber exits non-zero with instructions: set `enabled = false` under `[database]` or remove the `[database]` section entirely.
-- **Non-interactive stdin** (when stdin is not a TTY) — Fiber immediately treats this as a decline and exits non-zero without reading stdin.
+- **Accept (`c`)** — Chiacheck creates the file (and any parent directories) then continues.
+- **Decline or empty line (`q`)** — Chiacheck exits non-zero with instructions: set `enabled = false` under `[database]` or remove the `[database]` section entirely.
+- **Non-interactive stdin** (when stdin is not a TTY) — Chiacheck immediately treats this as a decline and exits non-zero without reading stdin.
 
 ### Cache lookup prompt
 
@@ -387,16 +401,16 @@ Look up scores in the database, or run fresh? (u)se db / clean (r)un [u]:
 - **Clean run (`r`)** — Ignore cached rows for this run; every commit is checked out and scored fresh. New results are still written to the database when scoring completes.
 - **Non-interactive stdin** (not a TTY) — Treated as **use db** without reading stdin.
 
-`fiber score` applies this to the single `HEAD` commit; `range` and `history` apply it across every commit in the requested range.
+`chiacheck score` applies this to the single `HEAD` commit; `range` and `history` apply it across every commit in the requested range.
 
 ### `--force` flag
 
 All three commands accept `--force` to bypass the cache, always recompute metrics, and overwrite any existing cached row:
 
 ```bash
-fiber score --force
-fiber range --from abc1234 --to def5678 --force
-fiber history --days 30 --force
+chiacheck score --force
+chiacheck range --from abc1234 --to def5678 --force
+chiacheck history --days 30 --force
 ```
 
 ### Disabling the database
@@ -412,7 +426,7 @@ enabled = false
 
 ## HTML Report
 
-When `--output` is provided to `range` or `history`, Fiber generates an HTML report with:
+When `--output` is provided to `range` or `history`, Chiacheck generates an HTML report with:
 
 - An interactive **Chart.js stacked bar chart** showing penalty by metric over commits (x-axis = commits, y-axis = total penalty). Lower bars are better; a bar of height 0 means a perfect score.
 - A **data table** with per-commit penalty totals and metric details.

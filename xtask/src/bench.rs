@@ -1,8 +1,8 @@
-//! Benchmark `fiber score` on the current branch vs the `main` branch.
+//! Benchmark `chiacheck score` on the current branch vs the `main` branch.
 //!
 //! Usage: `cargo xtask bench <TARGET_DIR> <RUNS>`
 //!
-//! Builds the current branch in release mode, times `fiber score` in `<TARGET_DIR>`
+//! Builds the current branch in release mode, times `chiacheck score` in `<TARGET_DIR>`
 //! `<RUNS>` times, then does the same for the `main` branch via a temporary git
 //! worktree, and finally prints per-run timings and averages for both branches.
 
@@ -26,7 +26,7 @@ pub fn run(target_dir: PathBuf, runs: usize) -> Result<()> {
     println!("==> Building current branch ({current_branch}) in release mode…");
     build_release(&workspace_root, &workspace_root.join("target"))?;
 
-    let current_binary = workspace_root.join("target/release/fiber");
+    let current_binary = workspace_root.join("target/release/chiacheck");
     anyhow::ensure!(
         current_binary.exists(),
         "expected release binary at {}",
@@ -70,7 +70,7 @@ pub fn run(target_dir: PathBuf, runs: usize) -> Result<()> {
 
     // Always clean up the worktree, even when the build fails.
     let main_times = if build_result.is_ok() {
-        let main_binary = main_target.join("release/fiber");
+        let main_binary = main_target.join("release/chiacheck");
         anyhow::ensure!(
             main_binary.exists(),
             "expected main release binary at {}",
@@ -127,7 +127,7 @@ fn build_release(crate_dir: &Path, target_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Run `fiber score` inside `target_dir` exactly `runs` times, using
+/// Run `chiacheck score` inside `target_dir` exactly `runs` times, using
 /// `/usr/bin/time` to measure wall-clock elapsed seconds.
 /// does a 0th warmup run that is not included in the results.
 ///
@@ -143,7 +143,7 @@ fn bench_binary(binary: &Path, target_dir: &Path, runs: usize) -> Result<Vec<f64
         }
 
         // `/usr/bin/time -f "ELAPSED:%e"` writes the marker line to stderr.
-        // fiber's own stdout/stderr are suppressed to keep output readable.
+        // chiacheck's own stdout/stderr are suppressed to keep output readable.
         let out = Command::new("/usr/bin/time")
             .args(["-f", "ELAPSED:%e"])
             .arg(binary)
@@ -161,7 +161,7 @@ fn bench_binary(binary: &Path, target_dir: &Path, runs: usize) -> Result<Vec<f64
 
         if !out.status.success() {
             bail!(
-                "`fiber score` failed during benchmark run {i}/{runs} after {elapsed:.3}s:\n{stderr}"
+                "`chiacheck score` failed during benchmark run {i}/{runs} after {elapsed:.3}s:\n{stderr}"
             );
         }
 

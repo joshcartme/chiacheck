@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum FiberError {
+pub enum ChiacheckError {
     #[error("Config error: {0}")]
     Config(String),
 
@@ -21,8 +21,8 @@ pub enum FiberError {
     Io(#[from] std::io::Error),
 }
 
-impl From<rusqlite::Error> for FiberError {
+impl From<rusqlite::Error> for ChiacheckError {
     fn from(e: rusqlite::Error) -> Self {
-        FiberError::Db(e.to_string())
+        ChiacheckError::Db(e.to_string())
     }
 }

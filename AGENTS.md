@@ -1,6 +1,6 @@
-# AGENTS.md - AI Assistant Guide for Fiber
+# AGENTS.md - AI Assistant Guide for Chiacheck
 
-Fiber is a Rust CLI that scores frontend project health with configurable metrics, git history traversal, and HTML trend reports.
+Chiacheck is a Rust CLI that scores frontend project health with configurable metrics, git history traversal, and HTML trend reports.
 
 ## Agent Rules
 
@@ -21,16 +21,16 @@ cargo clippy --all-targets
 
 ## Crates
 
-- **fiber**: the CLI crate (`fiber/`); depends on `oxc_ast` via `{ workspace = true }`.
+- **chiacheck**: the CLI crate (`chiacheck/`); depends on `oxc_ast` via `{ workspace = true }`.
 - **xtask**: dev task runner ([cargo-xtask](https://github.com/matklad/cargo-xtask) layout). Run from repo root with `cargo xtask …` (see `.cargo/config.toml`).
 
 ### Workspace dependencies
 
-- Pin **`oxc_ast`** in the root [`Cargo.toml`](Cargo.toml) under `[workspace.dependencies]`. The `fiber` crate references it with `oxc_ast = { workspace = true }`.
+- Pin **`oxc_ast`** in the root [`Cargo.toml`](Cargo.toml) under `[workspace.dependencies]`. The `chiacheck` crate references it with `oxc_ast = { workspace = true }`.
 
 ### xtask commands
 
-- **`cargo xtask gen-ast-type-map`** — Regenerates [`fiber/src/metrics/ast_type_map.rs`](fiber/src/metrics/ast_type_map.rs) from the resolved `oxc_ast` crate’s `src/generated/ast_kind.rs`. Run after bumping the workspace `oxc_ast` version, then rebuild/test and commit the generated file.
+- **`cargo xtask gen-ast-type-map`** — Regenerates [`chiacheck/src/metrics/ast_type_map.rs`](chiacheck/src/metrics/ast_type_map.rs) from the resolved `oxc_ast` crate’s `src/generated/ast_kind.rs`. Run after bumping the workspace `oxc_ast` version, then rebuild/test and commit the generated file.
 
 - **`cargo xtask check-oxc-version`** — Fails when **`workspace.dependencies.oxc_ast`** in root **`Cargo.toml`** differs between **`HEAD` and the git index** (after `git add`). Also fails when **disk** differs from **`HEAD`** but the index still matches **`HEAD`** (you edited `Cargo.toml` but forgot `git add`). Exits quickly when everything matches (or there is no `HEAD`).
 
