@@ -1,6 +1,6 @@
 {
   "name": "chiacheck",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A frontend health score calculator",
   "keywords": [
     "frontend",
@@ -31,10 +31,10 @@
     "node": ">=16"
   },
   "optionalDependencies": {
-    "@chiacheck/darwin-arm64": "0.1.0",
-    "@chiacheck/darwin-x64": "0.1.0",
-    "@chiacheck/linux-x64": "0.1.0",
-    "@chiacheck/linux-arm64": "0.1.0",
-    "@chiacheck/win32-x64": "0.1.0"
+    "@chiacheck/darwin-arm64": "0.1.1",
+    "@chiacheck/darwin-x64": "0.1.1",
+    "@chiacheck/linux-x64": "0.1.1",
+    "@chiacheck/linux-arm64": "0.1.1",
+    "@chiacheck/win32-x64": "0.1.1"
   }
 }
