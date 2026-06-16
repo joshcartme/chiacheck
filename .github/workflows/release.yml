@@ -14,8 +14,50 @@ permissions:
   contents: read
 
 jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Single source of truth: Cargo.toml and the launcher package.json must agree.
+      - name: Resolve and validate version
+        id: resolve
+        run: |
+          version=$(node scripts/release-version.mjs)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release version: $version"
+
+      # Tag pushes carry their own version: it must match the resolved one, else
+      # the pushed tag and the published packages would disagree.
+      - name: Tag matches resolved version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          resolved="${{ steps.resolve.outputs.version }}"
+          if [ "$tag_version" != "$resolved" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $resolved in chiacheck/Cargo.toml and npm/chiacheck/package.json."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME matches version $resolved."
+
+      # A manual publish mints the tag itself, so refuse to clobber an existing one.
+      # (Tag pushes are exempt: the tag necessarily already exists — it triggered us.)
+      - name: Ensure tag does not already exist
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: |
+          tag="v${{ steps.resolve.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::tag $tag already exists. Bump the version in chiacheck/Cargo.toml and npm/chiacheck/package.json before publishing."
+            exit 1
+          fi
+          echo "$tag is available."
+
   build:
     name: build ${{ matrix.target }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -95,7 +137,7 @@ jobs:
 
   publish:
     name: publish to npm
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-latest
     # Publish on tag pushes, or manual runs with publish=true.
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
@@ -119,7 +161,10 @@ jobs:
           pattern: bin-*
 
       - name: Assemble npm packages
-        run: node scripts/assemble-npm-packages.mjs
+        # Use the version resolved by preflight (Cargo.toml == package.json) for
+        # both tag pushes and manual dispatch; the script re-asserts it matches
+        # Cargo.toml as a final guard.
+        run: node scripts/assemble-npm-packages.mjs ${{ needs.preflight.outputs.version }}
 
       - name: Publish
         run: bash scripts/publish-npm.sh
@@ -128,3 +173,26 @@ jobs:
         # configured for all packages, re-comment it to use pure OIDC.
         # env:
         #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  tag:
+    name: tag release
+    # Only manual publishes mint a tag; tag pushes already have one. Runs after a
+    # successful publish so a failed release never leaves a tag behind.
+    needs: [preflight, publish]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the release tag
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create and push tag
+        env:
+          # Pushing with GITHUB_TOKEN does not re-trigger the `push: tags` workflow,
+          # so this won't kick off a redundant release run.
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          git tag "$tag"
+          git push origin "$tag"
+          echo "Pushed $tag."
