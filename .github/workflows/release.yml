@@ -168,11 +168,11 @@ jobs:
 
       - name: Publish
         run: bash scripts/publish-npm.sh
-        # Bootstrap only (first release, before trusted publishers exist): uncomment
-        # the env block and set the NPM_TOKEN secret. Once trusted publishers are
-        # configured for all packages, re-comment it to use pure OIDC.
-        # env:
-        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Bootstrap (first release, before trusted publishers exist): uses the
+        # NPM_TOKEN secret. Once trusted publishers are configured for every
+        # package on npmjs.com, re-comment this env block to use pure OIDC.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   tag:
     name: tag release
